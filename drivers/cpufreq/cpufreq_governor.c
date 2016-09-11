@@ -316,11 +316,18 @@ static void free_common_dbs_info(struct cpufreq_policy *policy,
 
 		dbs_data->cdata = cdata;
 		dbs_data->usage_count = 1;
+<<<<<<< HEAD
 
 		if (cdata->governor == GOV_ELEMENTALX)
 			rc = cdata->init_ex(dbs_data, policy);
 		else
 			rc = cdata->init(dbs_data);
+=======
+		if (cdata->governor == GOV_ELEMENTALX)
+			rc = cdata->init_ex(dbs_data, policy);
+		else
+			rc = cdata->init(dbs_data, policy);
+>>>>>>> 9c5708bb2451 (cpufreq; add elementalx governor)
 
 		if (rc) {
 			pr_err("%s: POLICY_INIT: init() failed\n", __func__);
@@ -527,6 +534,9 @@ static int cpufreq_governor_stop(struct cpufreq_policy *policy,
 	/* State should be equivalent to START */
 	if (!shared || !shared->policy)
 		return -EBUSY;
+
+		if (dbs_data->cdata->governor == GOV_ELEMENTALX)
+			ex_dbs_info->enable = 0;
 
 		if (dbs_data->cdata->governor == GOV_ELEMENTALX)
 			ex_dbs_info->enable = 0;

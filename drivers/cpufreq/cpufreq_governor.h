@@ -179,6 +179,12 @@ struct ex_cpu_dbs_info_s {
 	unsigned int enable:1;
 };
 
+struct ex_cpu_dbs_info_s {
+	struct cpu_dbs_common_info cdbs;
+	unsigned int down_floor;
+	unsigned int enable:1;
+};
+
 /* Per policy Governors sysfs tunables */
 struct od_dbs_tuners {
 	unsigned int ignore_nice_load;
@@ -231,7 +237,7 @@ struct common_dbs_data {
 				      struct dbs_data *dbs_data,
 				      bool modify_all);
 	void (*gov_check_cpu)(int cpu, unsigned int load);
-	int (*init)(struct dbs_data *dbs_data);
+	int (*init)(struct dbs_data *dbs_data, struct cpufreq_policy *policy);
 	int (*init_ex)(struct dbs_data *dbs_data, struct cpufreq_policy *policy);
 	void (*exit)(struct dbs_data *dbs_data);
 
