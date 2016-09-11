@@ -35,7 +35,8 @@ void dbs_check_cpu(struct dbs_data *dbs_data, int cpu)
 	struct cpu_dbs_info *cdbs = dbs_data->cdata->get_cpu_cdbs(cpu);
 	struct od_dbs_tuners *od_tuners = dbs_data->tuners;
 	struct cs_dbs_tuners *cs_tuners = dbs_data->tuners;
-	struct cpufreq_policy *policy = cdbs->shared->policy;
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	struct cpufreq_policy *policy;
 	unsigned int sampling_rate;
 	unsigned int max_load = 0;
 	unsigned int ignore_nice;
@@ -55,6 +56,9 @@ void dbs_check_cpu(struct dbs_data *dbs_data, int cpu)
 		sampling_rate *= od_dbs_info->rate_mult;
 
 		ignore_nice = od_tuners->ignore_nice_load;
+	} else if (dbs_data->cdata->governor == GOV_ELEMENTALX) {
+		sampling_rate = ex_tuners->sampling_rate;
+		ignore_nice = ex_tuners->ignore_nice_load;
 	} else {
 		sampling_rate = cs_tuners->sampling_rate;
 		ignore_nice = cs_tuners->ignore_nice_load;
@@ -266,6 +270,9 @@ static void set_sampling_rate(struct dbs_data *dbs_data,
 	if (dbs_data->cdata->governor == GOV_CONSERVATIVE) {
 		struct cs_dbs_tuners *cs_tuners = dbs_data->tuners;
 		cs_tuners->sampling_rate = sampling_rate;
+	} else if (dbs_data->cdata->governor == GOV_ELEMENTALX) {
+		struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+		ex_tuners->sampling_rate = sampling_rate;
 	} else {
 		struct od_dbs_tuners *od_tuners = dbs_data->tuners;
 		od_tuners->sampling_rate = sampling_rate;
@@ -275,8 +282,18 @@ static void set_sampling_rate(struct dbs_data *dbs_data,
 static int alloc_common_dbs_info(struct cpufreq_policy *policy,
 				 struct common_dbs_data *cdata)
 {
-	struct cpu_common_dbs_info *shared;
-	int j;
+	struct dbs_data *dbs_data;
+	struct od_cpu_dbs_info_s *od_dbs_info = NULL;
+	struct cs_cpu_dbs_info_s *cs_dbs_info = NULL;
+	struct ex_cpu_dbs_info_s *ex_dbs_info = NULL;
+	struct od_ops *od_ops = NULL;
+	struct od_dbs_tuners *od_tuners = NULL;
+	struct cs_dbs_tuners *cs_tuners = NULL;
+	struct ex_dbs_tuners *ex_tuners = NULL;
+	struct cpu_dbs_common_info *cpu_cdbs;
+	unsigned int sampling_rate, latency, ignore_nice, j, cpu = policy->cpu;
+	int io_busy = 0;
+	int rc;
 
 	/* Allocate memory for the common information for policy->cpus */
 	shared = kzalloc(sizeof(*shared), GFP_KERNEL);
@@ -297,8 +314,19 @@ static void free_common_dbs_info(struct cpufreq_policy *policy,
 	struct cpu_common_dbs_info *shared = cdbs->shared;
 	int j;
 
-	for_each_cpu(j, policy->cpus)
-		cdata->get_cpu_cdbs(j)->shared = NULL;
+		dbs_data->cdata = cdata;
+		dbs_data->usage_count = 1;
+
+		if (cdata->governor == GOV_ELEMENTALX)
+			rc = cdata->init_ex(dbs_data, policy);
+		else
+			rc = cdata->init(dbs_data);
+
+		if (rc) {
+			pr_err("%s: POLICY_INIT: init() failed\n", __func__);
+			kfree(dbs_data);
+			return rc;
+		}
 
 	kfree(shared);
 }
@@ -428,6 +456,11 @@ static int cpufreq_governor_start(struct cpufreq_policy *policy,
 
 		sampling_rate = cs_tuners->sampling_rate;
 		ignore_nice = cs_tuners->ignore_nice_load;
+	} else if (dbs_data->cdata->governor == GOV_ELEMENTALX) {
+		ex_tuners = dbs_data->tuners;
+		ex_dbs_info = dbs_data->cdata->get_cpu_dbs_info_s(cpu);
+		sampling_rate = ex_tuners->sampling_rate;
+		ignore_nice = ex_tuners->ignore_nice_load;
 	} else {
 		struct od_dbs_tuners *od_tuners = dbs_data->tuners;
 
@@ -462,11 +495,18 @@ static int cpufreq_governor_start(struct cpufreq_policy *policy,
 		struct cs_cpu_dbs_info_s *cs_dbs_info =
 			cdata->get_cpu_dbs_info_s(cpu);
 
-		cs_dbs_info->down_skip = 0;
-		cs_dbs_info->requested_freq = policy->cur;
-	} else {
-		struct od_ops *od_ops = cdata->gov_ops;
-		struct od_cpu_dbs_info_s *od_dbs_info = cdata->get_cpu_dbs_info_s(cpu);
+		if (dbs_data->cdata->governor == GOV_CONSERVATIVE) {
+			cs_dbs_info->down_skip = 0;
+			cs_dbs_info->enable = 1;
+			cs_dbs_info->requested_freq = policy->cur;
+		} else if (dbs_data->cdata->governor == GOV_ELEMENTALX) {
+			ex_dbs_info->down_floor = 0;
+			ex_dbs_info->enable = 1;
+		} else {
+			od_dbs_info->rate_mult = 1;
+			od_dbs_info->sample_type = OD_NORMAL_SAMPLE;
+			od_ops->powersave_bias_init_cpu(cpu);
+		}
 
 		od_dbs_info->rate_mult = 1;
 		od_dbs_info->sample_type = OD_NORMAL_SAMPLE;
@@ -488,14 +528,10 @@ static int cpufreq_governor_stop(struct cpufreq_policy *policy,
 	if (!shared || !shared->policy)
 		return -EBUSY;
 
-	/*
-	 * Work-handler must see this updated, as it should not proceed any
-	 * further after governor is disabled. And so timer_mutex is taken while
-	 * updating this value.
-	 */
-	mutex_lock(&shared->timer_mutex);
-	shared->policy = NULL;
-	mutex_unlock(&shared->timer_mutex);
+		if (dbs_data->cdata->governor == GOV_ELEMENTALX)
+			ex_dbs_info->enable = 0;
+
+		gov_cancel_work(dbs_data, policy);
 
 	gov_cancel_work(dbs_data, policy);
 
