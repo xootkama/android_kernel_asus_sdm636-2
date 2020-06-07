@@ -174,11 +174,13 @@ void mdss_check_dsi_ctrl_status(struct work_struct *work, uint32_t interval)
 #else
                 if (ret > 0) {
                         pstatus_data->is_first_check = 0;
+#endif
 			schedule_delayed_work(&pstatus_data->check_status,
 				msecs_to_jiffies(interval));
+#ifdef CONFIG_MACH_ASUS_X00TD
                 }
 #endif
-#ifndef CONFIF_MACH_ASUS_X00TD
+#ifndef CONFIG_MACH_ASUS_X00TD
 		else
 #endif
 #ifdef CONFIG_MACH_ASUS_X00TD

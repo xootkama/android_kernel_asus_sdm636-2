@@ -60,7 +60,7 @@
 
 &mdss_dsi1 {
 	status = "disabled";
-        qcom,dsi-pref-prim-pan = "<&dsi_nt36672_1080p_video_txd>;
+        qcom,dsi-pref-prim-pan = <&dsi_nt36672_1080p_video_txd>;
 };
 
 &dsi_nt36672_1080p_video_txd {

@@ -3143,7 +3143,7 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 	case MDSS_EVENT_AVR_MODE:
 		mdss_dsi_avr_config(ctrl_pdata, (int)(unsigned long) arg);
 		break;
-#ifndef CONFIG_MACH_ASUA_X00TD
+#ifndef CONFIG_MACH_ASUS_X00TD
 	case MDSS_EVENT_DSI_DYNAMIC_BITCLK:
 		if (ctrl_pdata->panel_data.panel_info.dynamic_bitclk) {
 			rc = mdss_dsi_dynamic_bitclk_config(pdata);

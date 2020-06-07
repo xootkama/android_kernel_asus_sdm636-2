@@ -1228,6 +1228,7 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
                 if (arg == FB_BLANK_POWERDOWN) {
                         lcd_suspend_flag = true;
                         printk("[Display] FB_BLANK_POWERDOWN\n");
+                }
 #endif
 		ret = fb_blank(info, arg);
 		info->flags &= ~FBINFO_MISC_USEREVENT;

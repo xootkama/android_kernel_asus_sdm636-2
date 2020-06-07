@@ -1596,7 +1596,7 @@ static int mdss_fb_resume_sub(struct msm_fb_data_type *mfd)
 	return ret;
 }
 
-#if defined(CONFIG_PM) && !defined(CONFIG_PM_SLEEP)
+#if defined(CONFIG_PM)
 #ifdef CONFIG_MACH_ASUS_X00TD
 static void asus_lcd_early_unblank_func(struct work_struct *work)
 {
@@ -1652,9 +1652,6 @@ static int mdss_fb_suspend(struct platform_device *pdev, pm_message_t state)
 static int mdss_fb_resume(struct platform_device *pdev)
 {
 	struct msm_fb_data_type *mfd = platform_get_drvdata(pdev);
-#ifdef CONFIG_MACH_ASUS_X00TD
-        int rc = 0;
-#endif
 	if (!mfd)
 		return -ENODEV;
 
@@ -1670,10 +1667,26 @@ static int mdss_fb_resume(struct platform_device *pdev)
 static int mdss_fb_pm_suspend(struct device *dev)
 {
 	struct msm_fb_data_type *mfd = dev_get_drvdata(dev);
-	int rc = 0;
+#ifdef CONFIG_MACH_ASUS_X00TD
+        int rc = 0;
+        struct fb_info *fbi;
+#endif
 
 	if (!mfd)
 		return -ENODEV;
+
+#ifdef CONFIG_MACH_ASUS_X00TD
+        fbi = mfd->fbi;
+        if (!fbi)
+                return -ENODEV;
+        if (mfd->index == 0) {
+                if(lcd_suspend_flag == false) {
+                        printk("[Display] display suspend, blank display.\n");
+                        fb_blank(fbi, FB_BLANK_POWERDOWN);
+                        lcd_suspend_flag = true;
+                }
+        }
+#endif
 
 	dev_dbg(dev, "display pm suspend\n");
 
@@ -1699,6 +1712,9 @@ static int mdss_fb_pm_suspend(struct device *dev)
 static int mdss_fb_pm_resume(struct device *dev)
 {
 	struct msm_fb_data_type *mfd = dev_get_drvdata(dev);
+#ifdef CONFIG_MACH_ASUS_X00TD
+        int rc = 0;
+#endif
 	if (!mfd)
 		return -ENODEV;
 
