@@ -1,3 +1,4 @@
+
 /* SPDX-License-Identifier: GPL-2.0 */
 
 / {
@@ -40,23 +41,22 @@
 	qcom,bark-time = <20000>;
 };
 
-&qcom,memshare {
-        mem_client_3_size: qcom,client_3 {
+&mem_client_3_size {
              /delete-property/ qcom,allocate-on-request;
+
              qcom,allocate-boot-time;
-}; 
-
-&qcom,glink-smem-native-xprt-adsp@86000000 {
-        /delete-property/ cpu-affinity = <1 2>;
-};
-
-&ufs1: ufshc@1da4000 {
-        /delete-property/ pinctrl-names;
-        /delete-property/ pinctrl-0;
-        /delete-property/ pinctrl-1;
 };
 
 &soc {
+        qcom,glink-smem-native-xprt-adsp@86000000 {
+               /delete-property/ cpu-affinity;
+        };
+
+        ufs1: ufshc@1da4000 {
+               /delete-property/ pinctrl-names;
+               /delete-property/ pinctrl-0;
+              /delete-property/ pinctrl-1;
+};
 	gpio_keys {
 		/delete-node/ camera_focus;
 		/delete-node/ camera_snapshot;

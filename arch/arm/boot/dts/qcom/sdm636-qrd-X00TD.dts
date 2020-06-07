@@ -1,4 +1,4 @@
-  /* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -29,11 +29,12 @@
 			<0x0001001b 0x0201011a 0x0 0x0>;
 };
 
-&mdss_fb0 {
-        /delete-property/ qcom,mdss-mixer-swap;
-
 &mdss_mdp {
 	qcom,mdss-pref-prim-intf = "dsi";
+};
+
+&mdss_fb0 {
+        /delete-property/ qcom,mdss-mixer-swap;
 };
 
 &mdss_dsi {
@@ -75,8 +76,6 @@
 };
 
 &soc {
-     /delete-node/ hbtp;
-
 	common_fp {
 		compatible = "common,fingerprint";
 		interrupt-parent = <&tlmm>;
@@ -149,7 +148,7 @@
 		stk,psctrl-reg = <0x31>;
 		stk,alsctrl-reg = <0x39>;
 		stk,ledctrl-reg = <0xFF>;
-		stk,wait-reg = <0x0A>;
+		stk,wait-reg = <0x0F>;
 		stk,ps-thdh = <120>;
 		stk,ps-thdl = <90>;
 		stk,transmittance = <1100>;

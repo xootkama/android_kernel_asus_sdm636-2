@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+ /* SPDX-License-Identifier: GPL-2.0 */
 
 &soc {
 	tert_mi2s_gpios: tert_mi2s_pinctrl {
@@ -13,5 +13,5 @@
 };
 
 &pm660_gpios {
-	/delete-node/ gpio@c200 {
+	/delete-node/ gpio@c200;
 };
