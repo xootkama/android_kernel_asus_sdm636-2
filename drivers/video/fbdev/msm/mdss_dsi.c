@@ -2397,6 +2397,7 @@ end_update:
 	return rc;
 }
 
+#ifndef CONFIG_MACH_ASUS_X00TD
 static int mdss_dsi_dynamic_bitclk_config(struct mdss_panel_data *pdata)
 {
 	int rc = 0;
@@ -2439,6 +2440,7 @@ static int mdss_dsi_dynamic_bitclk_config(struct mdss_panel_data *pdata)
 	}
 	return rc;
 }
+#endif
 
 static int mdss_dsi_dfps_config(struct mdss_panel_data *pdata, int new_fps)
 {
@@ -2891,13 +2893,28 @@ static ssize_t dynamic_bitclk_sysfs_wta(struct device *dev,
 		return -EINVAL;
 	}
 
+#ifndef CONFIG_MACH_ASUS_X00TD
 	pinfo->new_clk_rate = clk_rate;
 	if (mdss_dsi_is_hw_config_split(ctrl_pdata->shared_data)) {
+#else
+        rc = __mdss_dsi_dynamic_clock_switch(&ctrl_pdata->panel_data,
+                clk_rate);
+        if (!rc && mdss_dsi_is_hw_config_split(ctrl_pdata->shared_data)) {
+#endif
 		struct mdss_dsi_ctrl_pdata *octrl =
 			mdss_dsi_get_other_ctrl(ctrl_pdata);
+#ifndef CONFIG_MACH_ASUS_X00TD
 		struct mdss_panel_info *opinfo = &octrl->panel_data.panel_info;
 
 		opinfo->new_clk_rate = clk_rate;
+#else
+                rc = __mdss_dsi_dynamic_clock_switch(&octrl->panel_data,
+                       clk_rate);
+                if (rc)
+                       pr_err("failed to switch DSI bitclk for sctrl\n");
+        } else if (rc) {
+               pr_err("failed to switch DSI bitclk\n");
+#endif
 	}
 	return count;
 } /* dynamic_bitclk_sysfs_wta */
@@ -3126,6 +3143,7 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 	case MDSS_EVENT_AVR_MODE:
 		mdss_dsi_avr_config(ctrl_pdata, (int)(unsigned long) arg);
 		break;
+#ifndef CONFIG_MACH_ASUA_X00TD
 	case MDSS_EVENT_DSI_DYNAMIC_BITCLK:
 		if (ctrl_pdata->panel_data.panel_info.dynamic_bitclk) {
 			rc = mdss_dsi_dynamic_bitclk_config(pdata);
@@ -3134,6 +3152,7 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 					rc);
 		}
 		break;
+#endif
 	default:
 		pr_debug("%s: unhandled event=%d\n", __func__, event);
 		break;

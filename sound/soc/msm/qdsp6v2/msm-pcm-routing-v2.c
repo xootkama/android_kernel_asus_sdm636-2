@@ -48,6 +48,7 @@
 #include "q6voice.h"
 #include "sound/q6lsm.h"
 
+
 #ifndef CONFIG_DOLBY_DAP
 #undef DOLBY_ADM_COPP_TOPOLOGY_ID
 #define DOLBY_ADM_COPP_TOPOLOGY_ID 0xFFFFFFFE

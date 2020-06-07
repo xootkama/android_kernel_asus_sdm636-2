@@ -20,6 +20,9 @@
 #include <linux/slab.h>
 #include <linux/iopoll.h>
 #include <linux/kthread.h>
+#ifdef CONFIG_MACH_ASUS_X00TD
+#include <linux/errno.h>
+#endif
 
 #include <linux/msm-bus.h>
 
@@ -1249,6 +1252,9 @@ int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 		else if (sctrl_pdata)
 			ret = ctrl_pdata->check_read_status(sctrl_pdata);
 	} else {
+#ifdef CONFIG_MACH_ASUS_X00TD
+               ret = -ENOTSUPP;
+#endif
 		pr_err("%s: Read status register returned error\n", __func__);
 	}
 

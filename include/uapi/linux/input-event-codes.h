@@ -743,7 +743,9 @@
  * We define here ABS_RESERVED so userspace can rely on it and detect
  * the situation described above.
  */
+#ifndef CONFIG_MACH_ASUS_X00TD
 #define ABS_RESERVED		0x2e
+#endif
 
 #define ABS_MT_SLOT		0x2f	/* MT slot being modified */
 #define ABS_MT_TOUCH_MAJOR	0x30	/* Major axis of touching ellipse */

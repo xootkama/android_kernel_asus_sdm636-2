@@ -43,12 +43,8 @@
 	qcom,current-ma = <110>;
 };
 
-&pm660l_switch0 {
-	qcom,led-mask = <1>;
-};
-
 &pm660l_switch1 {
-	qcom,led-mask = <2>;
+	qcom,led-mask = <3>;
 };
 
 &pm660a_labibb {

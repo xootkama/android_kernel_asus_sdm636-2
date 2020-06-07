@@ -71,6 +71,10 @@ struct msm_pinctrl {
 	void __iomem *regs;
 };
 
+#ifdef CONFIG_MACH_ASUS_X00TD
+int g_resume_from_fp = 0;
+#endif
+
 static struct msm_pinctrl *msm_pinctrl_data;
 
 static inline struct msm_pinctrl *to_msm_pinctrl(struct gpio_chip *gc)
@@ -161,7 +165,9 @@ static int msm_pinmux_set_mux(struct pinctrl_dev *pctldev,
 		return -EINVAL;
 
 	spin_lock_irqsave(&pctrl->lock, flags);
-
+#ifdef CONFIG_MACH_ASUS_X00TD
+        g_resume_from_fp = 0;
+#endif
 	val = readl(pctrl->regs + g->ctl_reg);
 	val &= ~(0x7 << g->mux_bit);
 	val |= i << g->mux_bit;
@@ -944,6 +950,12 @@ static void msm_pinctrl_resume(void)
 				name = desc->action->name;
 
 			pr_warn("%s: %d triggered %s\n", __func__, irq, name);
+#ifdef CONFIG_MACH_ASUS_X00TD
+                        if (irq == 247) {
+                                pr_info("%s: fingerprint triggered resume.\n", __func__);
+                                g_resume_from_fp = 1;
+                        }
+#endif
 		}
 	}
 	spin_unlock_irqrestore(&pctrl->lock, flags);
