@@ -78,7 +78,7 @@
 };
 
 &pm660_pdphy {
-	status = "disabled";
+	       status = "disable";
 };
 
 &pm660_fg {
