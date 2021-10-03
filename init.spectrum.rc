@@ -45,7 +45,7 @@ on property:vendor.post_boot.parsed=1
 	# Set Display Resolution
     setprop sys.display-size 3840x2160
     # for set mode spectrum
-    setprop persist.spectrum.profile 0
+    setprop persist.spectrum.profile 2
 
 # Battery
 on property:persist.spectrum.profile=2
