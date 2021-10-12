@@ -610,6 +610,10 @@ struct kgsl_gpumem_alloc_id {
 #define IOCTL_KGSL_GPUMEM_ALLOC_ID \
 	_IOWR(KGSL_IOC_TYPE, 0x34, struct kgsl_gpumem_alloc_id)
 
+#ifdef CONFIG_CPU_FREQ_GOV_ELEMENTALX
+extern int graphics_boost;
+#endif
+
 /**
  * struct kgsl_gpumem_free_id - argument to IOCTL_KGSL_GPUMEM_FREE_ID
  * @id: GPU allocation id to free

@@ -45,8 +45,13 @@
 #define MAX_UDELAY		2000
 
 #ifdef CONFIG_CPU_FREQ_GOV_ELEMENTALX
-int graphics_boost = 6;
+int graphics_boost = 4;
 #endif
+
+/* Number of jiffies for a full thermal cycle */
+#define TH_HZ			20
+
+#define KGSL_MAX_BUSLEVELS	20
 
 struct clk_pair {
 	const char *name;
@@ -158,12 +163,15 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 
 	if (test_bit(KGSL_PWRFLAGS_AXI_ON, &pwr->power_flags)) {
 
-		if (pwr->pcl)
-			msm_bus_scale_client_update_request(pwr->pcl,
-				pwrlevel->bus_freq);
-		else if (pwr->ebi1_clk)
-			clk_set_rate(pwr->ebi1_clk, pwrlevel->bus_freq);
-	}
+	pwrlevel = &pwr->pwrlevels[pwr->active_pwrlevel];
+	clk_set_rate(pwr->grp_clks[0], pwrlevel->gpu_freq);
+	trace_kgsl_pwrlevel(device, pwr->active_pwrlevel,
+			pwrlevel->gpu_freq);
+#ifdef CONFIG_CPU_FREQ_GOV_ELEMENTALX
+    graphics_boost = pwr->active_pwrlevel;
+#endif
+}
+EXPORT_SYMBOL(kgsl_pwrctrl_pwrlevel_change);
 
 	if (test_bit(KGSL_PWRFLAGS_CLK_ON, &pwr->power_flags) ||
 		(device->state == KGSL_STATE_NAP)) {

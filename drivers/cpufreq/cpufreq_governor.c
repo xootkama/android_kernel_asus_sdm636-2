@@ -43,27 +43,15 @@ void dbs_check_cpu(struct dbs_data *dbs_data, int cpu)
 	unsigned int ignore_nice;
 	unsigned int j;
 
-	if (dbs_data->cdata->governor == GOV_ONDEMAND) {
-		struct od_cpu_dbs_info_s *od_dbs_info =
-				dbs_data->cdata->get_cpu_dbs_info_s(cpu);
-
-		/*
-		 * Sometimes, the ondemand governor uses an additional
-		 * multiplier to give long delays. So apply this multiplier to
-		 * the 'sampling_rate', so as to keep the wake-up-from-idle
-		 * detection logic a bit conservative.
-		 */
-		sampling_rate = od_tuners->sampling_rate;
-		sampling_rate *= od_dbs_info->rate_mult;
-
+	if (dbs_data->cdata->governor == GOV_ONDEMAND){
 		ignore_nice = od_tuners->ignore_nice_load;
 	} else if (dbs_data->cdata->governor == GOV_ELEMENTALX) {
-		sampling_rate = ex_tuners->sampling_rate;
 		ignore_nice = ex_tuners->ignore_nice_load;
 	} else {
-		sampling_rate = cs_tuners->sampling_rate;
 		ignore_nice = cs_tuners->ignore_nice_load;
 	}
+
+	policy = cdbs->cur_policy;
 
 	/* Get Absolute Load */
 	for_each_cpu(j, policy->cpus) {
@@ -317,18 +305,10 @@ static void free_common_dbs_info(struct cpufreq_policy *policy,
 
 		dbs_data->cdata = cdata;
 		dbs_data->usage_count = 1;
-<<<<<<< HEAD
-
-		if (cdata->governor == GOV_ELEMENTALX)
-			rc = cdata->init_ex(dbs_data, policy);
-		else
-			rc = cdata->init(dbs_data);
-=======
 		if (cdata->governor == GOV_ELEMENTALX)
 			rc = cdata->init_ex(dbs_data, policy);
 		else
 			rc = cdata->init(dbs_data, policy);
->>>>>>> 9c5708bb2451 (cpufreq; add elementalx governor)
 
 		if (rc) {
 			pr_err("%s: POLICY_INIT: init() failed\n", __func__);
@@ -508,7 +488,6 @@ static int cpufreq_governor_start(struct cpufreq_policy *policy,
 			cs_dbs_info->enable = 1;
 			cs_dbs_info->requested_freq = policy->cur;
 		} else if (dbs_data->cdata->governor == GOV_ELEMENTALX) {
-			ex_dbs_info->down_floor = 0;
 			ex_dbs_info->enable = 1;
 		} else {
 			od_dbs_info->rate_mult = 1;
@@ -535,6 +514,9 @@ static int cpufreq_governor_stop(struct cpufreq_policy *policy,
 	/* State should be equivalent to START */
 	if (!shared || !shared->policy)
 		return -EBUSY;
+
+		if (dbs_data->cdata->governor == GOV_ELEMENTALX)
+			ex_dbs_info->enable = 0;
 
 		if (dbs_data->cdata->governor == GOV_ELEMENTALX)
 			ex_dbs_info->enable = 0;
