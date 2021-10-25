@@ -339,6 +339,7 @@ struct tcp_sock {
 
 /* Receiver side RTT estimation */
 	struct {
+		u32	rtt;
 		u32	rtt_us;
 		u32	seq;
 		u64	time;
