@@ -2638,7 +2638,7 @@ static int therm_get_temp(uint32_t id, enum sensor_id_type type, int *temp)
 		goto get_temp_exit;
 	}
 
-	if (id == -19) {
+	if ((id == -19) || (id == -517)) {
 		ret = -EINVAL;
 		goto get_temp_exit;
 	}
@@ -2706,7 +2706,7 @@ int sensor_mgr_set_threshold(uint32_t zone_id,
 		goto set_threshold_exit;
 	}
 
-	if (zone_id == -19) {
+	if ((zone_id == -19) || (zone_id == -517)) {
 		ret = -EINVAL;
 		goto set_threshold_exit;
 	}
@@ -3189,7 +3189,8 @@ static int __ref update_offline_cores(int val)
 
 	if (pend_hotplug_req && !in_suspend && !retry_in_progress) {
 		retry_in_progress = true;
-		schedule_delayed_work(&retry_hotplug_work,
+		queue_delayed_work(system_power_efficient_wq,
+			&retry_hotplug_work,
 			msecs_to_jiffies(HOTPLUG_RETRY_INTERVAL_MS));
 	}
 
@@ -3683,8 +3684,9 @@ static void check_temp(struct work_struct *work)
 
 reschedule:
 	if (polling_enabled)
-		schedule_delayed_work(&check_temp_work,
-				msecs_to_jiffies(msm_thermal_info.poll_ms));
+		queue_delayed_work(system_power_efficient_wq,
+			&check_temp_work,
+			msecs_to_jiffies(msm_thermal_info.poll_ms));
 }
 
 static int __ref msm_thermal_cpu_callback(struct notifier_block *nfb,
@@ -3780,7 +3782,7 @@ static int hotplug_init_cpu_offlined(void)
 	for_each_possible_cpu(cpu) {
 		if (!(msm_thermal_info.core_control_mask & BIT(cpus[cpu].cpu)))
 			continue;
-		if (cpus[cpu].sensor_id == -19)
+		if ((cpus[cpu].sensor_id == -19) || (cpus[cpu].sensor_id == -517))
 			continue;
 		if (therm_get_temp(cpus[cpu].sensor_id, cpus[cpu].id_type,
 					&temp)) {

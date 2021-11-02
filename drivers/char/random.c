@@ -777,8 +777,12 @@ retry:
 
 	if (has_initialized) {
 		r->initialized = 1;
-		wake_up_interruptible(&random_read_wait);
-		kill_fasync(&fasync, SIGIO, POLL_IN);
+		r->entropy_total = 0;
+		if (r == &nonblocking_pool) {
+			process_random_ready_list();
+			wake_up_all(&urandom_init_wait);
+			pr_notice("random: %s pool is initialized\n", r->name);
+		}
 	}
 
 	trace_credit_entropy_bits(r->name, nbits,
