@@ -56,7 +56,7 @@ MODULE_PARM_DESC(use_shadow, "use shadow window heuristic");
 module_param(use_tolerance, bool, 0644);
 MODULE_PARM_DESC(use_tolerance, "use loss tolerance heuristic");
 
-struct cdg_minmax {
+struct minmax {
 	union {
 		struct {
 			s32 min;
@@ -74,10 +74,10 @@ enum cdg_state {
 };
 
 struct cdg {
-	struct cdg_minmax rtt;
-	struct cdg_minmax rtt_prev;
-	struct cdg_minmax *gradients;
-	struct cdg_minmax gsum;
+	struct minmax rtt;
+	struct minmax rtt_prev;
+	struct minmax *gradients;
+	struct minmax gsum;
 	bool gfilled;
 	u8  tail;
 	u8  state;
@@ -353,7 +353,7 @@ static void tcp_cdg_cwnd_event(struct sock *sk, const enum tcp_ca_event ev)
 {
 	struct cdg *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
-	struct cdg_minmax *gradients;
+	struct minmax *gradients;
 
 	switch (ev) {
 	case CA_EVENT_CWND_RESTART:

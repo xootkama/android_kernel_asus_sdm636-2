@@ -334,8 +334,8 @@
 			dpdm-supply = <&qusb_phy0>;
 
 			qcom,thermal-mitigation
-					= <3000000 3000000 3000000 3000000
-						3000000 3000000>;
+					= <3000000 2500000 2000000 1500000
+						1000000 500000>;
 
 			qcom,chgr@1000 {
 				reg = <0x1000 0x100>;
@@ -545,7 +545,6 @@
 			compatible = "qcom,fg-gen3";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			qcom,vadc_therm-vadc = <&pm660_vadc>;
 			qcom,pmic-revid = <&pm660_revid>;
 			io-channels = <&pm660_rradc 0>,
 				      <&pm660_rradc 7>;
@@ -641,7 +640,7 @@
 			qcom,misc-clk-trim-error-reg = <0xf3>;
 			qcom,actuator-type = "lra";
 			qcom,play-mode = "direct";
-			qcom,vmax-mv = <3000>;
+			qcom,vmax-mv = <3200>;
 			qcom,ilim-ma = <800>;
 			qcom,wave-shape = "square";
 			qcom,wave-play-rate-us = <6667>;

@@ -73,12 +73,11 @@ static inline u32 batadv_choose_claim(const void *data, u32 size)
 /* return the index of the backbone gateway */
 static inline u32 batadv_choose_backbone_gw(const void *data, u32 size)
 {
-	const struct batadv_bla_backbone_gw *gw;
+	const struct batadv_bla_claim *claim = (struct batadv_bla_claim *)data;
 	u32 hash = 0;
 
-	gw = (struct batadv_bla_backbone_gw *)data;
-	hash = jhash(&gw->orig, sizeof(gw->orig), hash);
-	hash = jhash(&gw->vid, sizeof(gw->vid), hash);
+	hash = jhash(&claim->addr, sizeof(claim->addr), hash);
+	hash = jhash(&claim->vid, sizeof(claim->vid), hash);
 
 	return hash % size;
 }
@@ -381,10 +380,7 @@ static void batadv_bla_send_claim(struct batadv_priv *bat_priv, u8 *mac,
 			   skb->len + ETH_HLEN);
 	soft_iface->last_rx = jiffies;
 
-	if (in_interrupt())
-		netif_rx(skb);
-	else
-		netif_rx_ni(skb);
+	netif_rx(skb);
 out:
 	if (primary_if)
 		batadv_hardif_free_ref(primary_if);
