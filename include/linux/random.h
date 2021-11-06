@@ -18,71 +18,31 @@ struct random_ready_callback {
 };
 
 extern void add_device_randomness(const void *, unsigned int);
-
-#if defined(LATENT_ENTROPY_PLUGIN) && !defined(__CHECKER__)
-static inline void add_latent_entropy(void)
-{
-	add_device_randomness((const void *)&latent_entropy,
-			      sizeof(latent_entropy));
-}
-#else
-static inline void add_latent_entropy(void) {}
-#endif
-
 extern void add_input_randomness(unsigned int type, unsigned int code,
 				 unsigned int value);
 extern void add_interrupt_randomness(int irq, int irq_flags);
 
 extern void get_random_bytes(void *buf, int nbytes);
-extern int wait_for_random_bytes(void);
-extern bool rng_is_initialized(void);
 extern int add_random_ready_callback(struct random_ready_callback *rdy);
 extern void del_random_ready_callback(struct random_ready_callback *rdy);
-extern int __must_check get_random_bytes_arch(void *buf, int nbytes);
+extern void get_random_bytes_arch(void *buf, int nbytes);
+void generate_random_uuid(unsigned char uuid_out[16]);
+extern int random_int_secret_init(void);
 
 #ifndef MODULE
 extern const struct file_operations random_fops, urandom_fops;
 #endif
 
-u32 get_random_u32(void);
-u64 get_random_u64(void);
-static inline unsigned int get_random_int(void)
-{
-	return get_random_u32();
-}
-static inline unsigned long get_random_long(void)
-{
-#if BITS_PER_LONG == 64
-	return get_random_u64();
-#else
-	return get_random_u32();
-#endif
-}
-
-unsigned long randomize_page(unsigned long start, unsigned long range);
+unsigned int get_random_int(void);
+unsigned long get_random_long(void);
+unsigned long randomize_range(unsigned long start, unsigned long end, unsigned long len);
 
 /*
- * Handle minimum values for seeds
+ * This is designed to be standalone for just prandom
+ * users, but for now we include it from <linux/random.h>
+ * for legacy reasons.
  */
-static inline u32 __seed(u32 x, u32 m)
-{
-	return (x < m) ? x + m : x;
-}
-
-/**
- * prandom_seed_state - set seed for prandom_u32_state().
- * @state: pointer to state structure to receive the seed.
- * @seed: arbitrary 64-bit value to use as a seed.
- */
-static inline void prandom_seed_state(struct rnd_state *state, u64 seed)
-{
-	u32 i = (seed >> 32) ^ (seed << 10) ^ seed;
-
-	state->s1 = __seed(i,   2U);
-	state->s2 = __seed(i,   8U);
-	state->s3 = __seed(i,  16U);
-	state->s4 = __seed(i, 128U);
-}
+#include <linux/prandom.h>
 
 #ifdef CONFIG_ARCH_RANDOM
 # include <asm/archrandom.h>
@@ -112,11 +72,5 @@ static inline int arch_has_random_seed(void)
 	return 0;
 }
 #endif
-
-/* Pseudo random number generator from numerical recipes. */
-static inline u32 next_pseudo_random32(u32 seed)
-{
-	return seed * 1664525 + 1013904223;
-}
 
 #endif /* _LINUX_RANDOM_H */
