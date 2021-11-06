@@ -410,8 +410,6 @@ config GCC_PLUGIN_LATENT_ENTROPY
 	   * https://grsecurity.net/
 	   * https://pax.grsecurity.net/
 
-<<<<<<< HEAD
-=======
 config GCC_PLUGIN_STRUCTLEAK
 	bool "Force initialization of variables containing userspace addresses"
 	depends on GCC_PLUGINS
@@ -434,7 +432,6 @@ config GCC_PLUGIN_STRUCTLEAK_VERBOSE
 	  initialized. Since not all existing initializers are detected
 	  by the plugin, this can produce false positive warnings.
 
->>>>>>> aa5566979a26541d863d1e7ce1dc225ee20bb124
 config HAVE_CC_STACKPROTECTOR
 	bool
 	help
