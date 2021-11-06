@@ -2,6 +2,8 @@
 #define _LINUX_FUTEX_H
 
 #include <linux/ktime.h>
+#include <linux/sched.h>
+
 #include <uapi/linux/futex.h>
 
 struct inode;

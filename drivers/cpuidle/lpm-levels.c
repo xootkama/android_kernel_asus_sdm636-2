@@ -723,13 +723,14 @@ static int cpu_power_select(struct cpuidle_device *dev,
 		bool allow;
 
 		allow = lpm_cpu_mode_allow(dev->cpu, i, true);
+		allow &= !(dev->states_usage[i].disable);
 
 		if (!allow)
 			continue;
 
 		lvl_latency_us = pwr_params->latency_us;
 
-		if (latency_us < lvl_latency_us)
+		if (latency_us <= lvl_latency_us)
 			break;
 
 		if (next_event_us) {
@@ -1075,7 +1076,7 @@ static int cluster_select(struct lpm_cluster *cluster, bool from_idle,
 					&level->num_cpu_votes))
 			continue;
 
-		if (from_idle && latency_us < pwr_params->latency_us)
+		if (from_idle && latency_us <= pwr_params->latency_us)
 			break;
 
 		if (sleep_us < pwr_params->time_overhead_us)
@@ -1608,7 +1609,9 @@ static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 		goto exit;
 
 	BUG_ON(!use_psci);
+	cpuidle_set_idle_cpu(dev->cpu);
 	success = psci_enter_sleep(cluster, idx, true);
+	cpuidle_clear_idle_cpu(dev->cpu);
 
 exit:
 	end_time = ktime_to_ns(ktime_get());

@@ -23,7 +23,7 @@
 #include "mdss_dsi_clk.h"
 #include <linux/interrupt.h>
 
-#define MAX_RECOVERY_TRIALS 10
+#define MAX_RECOVERY_TRIALS 3
 #define MAX_SESSIONS 2
 
 #define SPLIT_MIXER_OFFSET 0x800
@@ -904,7 +904,7 @@ int mdss_mdp_resource_control(struct mdss_mdp_ctl *ctl, u32 sw_event)
 				schedule_work(&ctx->gate_clk_work);
 
 			/* start work item to shut down after delay */
-			schedule_delayed_work(
+			queue_delayed_work(system_power_efficient_wq,
 					&ctx->delayed_off_clk_work,
 					CMD_MODE_IDLE_TIMEOUT);
 		}
@@ -1068,7 +1068,8 @@ int mdss_mdp_resource_control(struct mdss_mdp_ctl *ctl, u32 sw_event)
 			 * reached. This is to prevent the case where early wake
 			 * up is called but no frame update is sent.
 			 */
-			schedule_delayed_work(&ctx->delayed_off_clk_work,
+			queue_delayed_work(system_power_efficient_wq,
+                                &ctx->delayed_off_clk_work,
 				      CMD_MODE_IDLE_TIMEOUT);
 			pr_debug("off work scheduled\n");
 		}
@@ -1380,6 +1381,7 @@ static void mdss_mdp_cmd_pingpong_done(void *arg)
 		return;
 	}
 
+	vsync_time = ktime_get();
 	mdss_mdp_ctl_perf_set_transaction_status(ctl,
 		PERF_HW_MDP_STATE, PERF_STATUS_DONE);
 

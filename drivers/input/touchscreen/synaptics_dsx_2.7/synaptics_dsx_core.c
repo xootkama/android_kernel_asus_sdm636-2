@@ -155,7 +155,7 @@
 #define GESTURE_EVENT_W 		253
 #define GESTURE_EVENT_Z 		254
 #define GESTURE_EVENT_SWIPE_UP 		258
-#define GESTURE_EVENT_DOUBLE_CLICK 	204
+#define GESTURE_EVENT_DOUBLE_CLICK 	KEY_WAKEUP
 
 #define SYNA_GESTURE_MODE 		"tpd_gesture"
 #endif
@@ -3738,7 +3738,7 @@ static int synaptics_rmi4_gpio_setup(int gpio, bool config, int dir, int state)
 	unsigned char buf[16];
 
 	if (config) {
-		snprintf(buf, PAGE_SIZE, "dsx_gpio_%u\n", gpio);
+		snprintf(buf, sizeof(buf), "dsx_gpio_%u\n", gpio);
 
 		retval = gpio_request(gpio, buf);
 		if (retval) {

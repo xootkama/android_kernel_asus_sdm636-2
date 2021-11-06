@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, 2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, 2019-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -53,13 +53,19 @@ struct snd_msm {
 #define CMD_EOS_MIN_TIMEOUT_LENGTH  50
 #define CMD_EOS_TIMEOUT_MULTIPLIER  (HZ * 50)
 
+#if defined(CONFIG_TRACING) && defined(DEBUG)
+#define msm_trace_printk(...) trace_printk(__VA_ARGS__)
+#else
+#define msm_trace_printk(...)
+#endif
+
 #define ATRACE_END() \
-	trace_printk("tracing_mark_write: E\n")
+	msm_trace_printk("tracing_mark_write: E\n")
 #define ATRACE_BEGIN(name) \
-	trace_printk("tracing_mark_write: B|%d|%s\n", current->tgid, name)
+	msm_trace_printk("tracing_mark_write: B|%d|%s\n", current->tgid, name)
 #define ATRACE_FUNC() ATRACE_BEGIN(__func__)
 #define ATRACE_INT(name, value) \
-	trace_printk("tracing_mark_write: C|%d|%s|%d\n", \
+	msm_trace_printk("tracing_mark_write: C|%d|%s|%d\n", \
 			current->tgid, name, (int)(value))
 
 #define SIO_PLAYBACK_MAX_PERIOD_SIZE PLAYBACK_MAX_PERIOD_SIZE
@@ -662,12 +668,22 @@ static int msm_pcm_volume_ctl_get(struct snd_kcontrol *kcontrol,
 {
 	struct snd_pcm_volume *vol = snd_kcontrol_chip(kcontrol);
 	struct msm_plat_data *pdata = NULL;
-	struct snd_pcm_substream *substream =
-		vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
+	struct snd_pcm_substream *substream = NULL;
 	struct snd_soc_pcm_runtime *soc_prtd = NULL;
 	struct msm_audio *prtd;
 
 	pr_debug("%s\n", __func__);
+	if (!vol) {
+		pr_err("%s: vol is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!vol->pcm) {
+		pr_err("%s: vol->pcm is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	substream = vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
 	if (!substream) {
 		pr_err("%s substream not found\n", __func__);
 		return -ENODEV;
@@ -699,13 +715,25 @@ static int msm_pcm_volume_ctl_put(struct snd_kcontrol *kcontrol,
 	int rc = 0;
 	struct snd_pcm_volume *vol = snd_kcontrol_chip(kcontrol);
 	struct msm_plat_data *pdata = NULL;
-	struct snd_pcm_substream *substream =
-		vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
+	struct snd_pcm_substream *substream = NULL;
 	struct snd_soc_pcm_runtime *soc_prtd = NULL;
 	struct msm_audio *prtd;
 	int volume = ucontrol->value.integer.value[0];
 
 	pr_debug("%s: volume : 0x%x\n", __func__, volume);
+
+	if (!vol) {
+		pr_err("%s: vol is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!vol->pcm) {
+		pr_err("%s: vol->pcm is NULL\n", __func__);
+		return -ENODEV;
+	}
+
+	substream = vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
+
 	if (!substream) {
 		pr_err("%s substream not found\n", __func__);
 		return -ENODEV;

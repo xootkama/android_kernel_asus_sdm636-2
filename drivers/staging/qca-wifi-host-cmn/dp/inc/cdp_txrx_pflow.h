@@ -30,4 +30,3 @@ extern uint32_t ol_pflow_update_pdev_params(struct ol_txrx_pdev_t *,
 		ol_ath_param_t, uint32_t, void *);
 #endif
 #endif
-

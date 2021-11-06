@@ -445,6 +445,11 @@ int sensor_get_temp(uint32_t sensor_id, int *temp)
 
 	ret = sensor->tz->ops->get_temp(sensor->tz, temp);
 
+	if (!temp && !ret) {
+		pr_debug("thermal_core: Reporting default temperature.");
+		*temp = DEFAULT_TEMP;
+	}
+
 	return ret;
 }
 EXPORT_SYMBOL(sensor_get_temp);
@@ -798,10 +803,12 @@ static void thermal_zone_device_set_polling(struct thermal_zone_device *tz,
 					    int delay)
 {
 	if (delay > 1000)
-		mod_delayed_work(system_freezable_wq, &tz->poll_queue,
+		mod_delayed_work(system_freezable_power_efficient_wq,
+				 &tz->poll_queue,
 				 round_jiffies(msecs_to_jiffies(delay)));
 	else if (delay)
-		mod_delayed_work(system_freezable_wq, &tz->poll_queue,
+		mod_delayed_work(system_freezable_power_efficient_wq,
+				 &tz->poll_queue,
 				 msecs_to_jiffies(delay));
 	else
 		cancel_delayed_work(&tz->poll_queue);
