@@ -15,19 +15,8 @@ CPPFLAGS_vmlinux.lds = -DTEXT_OFFSET=$(TEXT_OFFSET)
 OBJCOPYFLAGS	:=-O binary -R .note -R .note.gnu.build-id -R .comment -S
 GZFLAGS		:=-9
 
-ifeq ($(CONFIG_RELOCATABLE), y)
-# Pass --no-apply-dynamic-relocs to restore pre-binutils-2.27 behaviour
-# for relative relocs, since this leads to better Image compression
-# with the relocation offsets always being zero.
-LDFLAGS_vmlinux		+= -Bsymbolic -z notext \
-			$(call ld-option, --no-apply-dynamic-relocs)
-			
-# Pass -pie for lld and -shared for other linkers to minimize Image size.
-ifeq ($(ld-name),lld)
-LDFLAGS_vmlinux		+= -pie
-else
-LDFLAGS_vmlinux		+= -shared
-endif			
+ifneq ($(CONFIG_RELOCATABLE),)
+LDFLAGS_vmlinux		+= -pie -Bsymbolic
 endif
 
 KBUILD_DEFCONFIG := defconfig
@@ -59,10 +48,6 @@ ifeq ($(CONFIG_COMPAT_VDSO), y)
   else ifeq ($(cc-name),clang)
     export CLANG_TRIPLE_ARM32 ?= $(CROSS_COMPILE_ARM32)
     export CLANG_TARGET_ARM32 := --target=$(notdir $(CLANG_TRIPLE_ARM32:%-=%))
-    export GCC_TOOLCHAIN32_DIR := $(dir $(shell which $(CROSS_COMPILE_ARM32)ld))
-    export GCC_TOOLCHAIN32 := $(realpath $(GCC_TOOLCHAIN32_DIR)/..)
-    export CLANG_PREFIX32 := --prefix=$(GCC_TOOLCHAIN32_DIR)$(notdir $(CROSS_COMPILE_ARM32))
-    export CLANG_GCC32_TC := --gcc-toolchain=$(GCC_TOOLCHAIN32)
     export CONFIG_VDSO32 := y
     vdso32 := -DCONFIG_VDSO32=1
   else ifeq ($(shell which $(CROSS_COMPILE_ARM32)$(cc-name) 2> /dev/null),)
@@ -76,9 +61,6 @@ endif
 
 ifeq ($(cc-name),clang)
 KBUILD_CFLAGS	+= $(call clang-ifversion, -ge, 0600, -mgeneral-regs-only, -mno-implicit-float)
-ifeq ($(CONFIG_ARCH_SDM660), y)
-KBUILD_CFLAGS	+= -mcpu=cortex-a53
-endif
 else
 KBUILD_CFLAGS	+= -mgeneral-regs-only
 endif
@@ -88,10 +70,6 @@ KBUILD_CFLAGS	+= $(call cc-option, -mpc-relative-literal-loads)
 KBUILD_CFLAGS	+= -fno-asynchronous-unwind-tables
 KBUILD_AFLAGS	+= $(lseinstr) $(vdso32)
 
-KBUILD_CFLAGS	+= $(call cc-ifversion, -ge, 0500, -DCONFIG_ARCH_SUPPORTS_INT128)
-
-LDFLAGS		+= -EB $(call ld-option, -maarch64elfb, -maarch64linuxb -z norelro
-
 ifeq ($(CONFIG_CPU_BIG_ENDIAN), y)
 KBUILD_CPPFLAGS	+= -mbig-endian
 AS		+= -EB
@@ -99,13 +77,8 @@ LD		+= -EB
 else
 KBUILD_CPPFLAGS	+= -mlittle-endian
 AS		+= -EL
-LDFLAGS		+= -EL $(call ld-option, -maarch64elf, -maarch64linux -z norelro)
+LD		+= -EL
 endif
-
-ifeq ($(ld-name),lld)
-KBUILD_LDFLAGS	+= -z norelro
-endif
-
 
 CHECKFLAGS	+= -D__aarch64__
 
