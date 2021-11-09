@@ -209,6 +209,10 @@ config KERNEL_LZ4
 
 endchoice
 
+config WERROR
+        bool "Compile the kernel with warnings as errors"
+	default COMPILE_TEST
+	
 config DEFAULT_HOSTNAME
 	string "Default hostname"
 	default "(none)"
@@ -1951,6 +1955,7 @@ config PROFILING
 	help
 	  Say Y here to enable the extended profiling support mechanisms used
 	  by profilers such as OProfile.
+	  
 
 #
 # Place an empty function call at each tracepoint site. Can be
