@@ -23,6 +23,10 @@ config DEVKMEM
 	  /dev/kmem device is rarely used, but can be used for certain
 	  kind of kernel debugging operations.
 	  When in doubt, say "N".
+	  
+config WERROR
+        bool "Compile the kernel with warnings as errors"
+	default COMPILE_TEST
 
 config SGI_SNSC
 	bool "SGI Altix system controller communication support"
