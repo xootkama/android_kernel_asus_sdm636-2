@@ -1158,46 +1158,6 @@ static ssize_t _extract_entropy(struct entropy_store *r, void *buf,
 }
 
 /*
- * This function is the exported kernel interface.  It returns some
- * number of good random numbers, suitable for key generation, seeding
- * TCP sequence numbers, etc.  It does not rely on the hardware random
- * number generator.  For random bytes direct from the hardware RNG
- * (when available), use get_random_bytes_arch(). In order to ensure
- * that the randomness provided by this function is okay, the function
- * wait_for_random_bytes() should be called and return 0 at least once
- * at any point prior.
- */
-static void _get_random_bytes(void *buf, int nbytes)
-{
-	__u8 tmp[CHACHA20_BLOCK_SIZE] __aligned(4);
-
-	trace_get_random_bytes(nbytes, _RET_IP_);
-
-	while (nbytes >= CHACHA20_BLOCK_SIZE) {
-		extract_crng(buf);
-		buf += CHACHA20_BLOCK_SIZE;
-		nbytes -= CHACHA20_BLOCK_SIZE;
-	}
-
-	if (nbytes > 0) {
-		extract_crng(tmp);
-		memcpy(buf, tmp, nbytes);
-		crng_backtrack_protect(tmp, nbytes);
-	} else
-		crng_backtrack_protect(tmp, CHACHA20_BLOCK_SIZE);
-	memzero_explicit(tmp, sizeof(tmp));
-}
-
-void get_random_bytes(void *buf, int nbytes)
-{
-	static void *previous;
-
-	warn_unseeded_randomness(&previous);
-	_get_random_bytes(buf, nbytes);
-}
-EXPORT_SYMBOL(get_random_bytes);
-
-/*
  * Wait for the urandom pool to be seeded and thus guaranteed to supply
  * cryptographically secure random numbers. This applies to: the /dev/urandom
  * device, the get_random_bytes function, and the get_random_{u32,u64,int,long}
