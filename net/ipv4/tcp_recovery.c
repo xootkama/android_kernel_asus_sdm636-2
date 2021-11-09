@@ -78,9 +78,30 @@ int tcp_rack_mark_lost(struct sock *sk)
 	return prior_retrans - tp->retrans_out;
 }
 
-/* Record the most recently (re)sent time among the (s)acked packets */
-void tcp_rack_advance(struct tcp_sock *tp,
-		      const struct skb_mstamp *xmit_time, u8 sacked)
+void tcp_rack_mark_lost(struct sock *sk, const struct skb_mstamp *now)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	u32 timeout;
+
+	if (!tp->rack.advanced)
+		return;
+
+	/* Reset the advanced flag to avoid unnecessary queue scanning */
+	tp->rack.advanced = 0;
+	tcp_rack_detect_loss(sk, now, &timeout);
+	if (timeout) {
+		timeout = usecs_to_jiffies(timeout + TCP_REO_TIMEOUT_MIN);
+		inet_csk_reset_xmit_timer(sk, ICSK_TIME_REO_TIMEOUT,
+					  timeout, inet_csk(sk)->icsk_rto);
+	}
+}
+
+/* Record the most recently (re)sent time among the (s)acked packets
+ * This is "Step 3: Advance RACK.xmit_time and update RACK.RTT" from
+ * draft-cheng-tcpm-rack-00.txt
+ */
+void tcp_rack_advance(struct tcp_sock *tp, u8 sacked, u32 end_seq,
+		      u64 xmit_time)
 {
 	if (tp->rack.mstamp.v64 &&
 	    !skb_mstamp_after(xmit_time, &tp->rack.mstamp))
@@ -103,7 +124,32 @@ void tcp_rack_advance(struct tcp_sock *tp,
 		if (skb_mstamp_us_delta(&now, xmit_time) < tcp_min_rtt(tp))
 			return;
 	}
-
-	tp->rack.mstamp = *xmit_time;
+	tp->rack.rtt_us = rtt_us;
+	tp->rack.mstamp = xmit_time;
+	tp->rack.end_seq = end_seq;
 	tp->rack.advanced = 1;
+}
+
+/* We have waited long enough to accommodate reordering. Mark the expired
+ * packets lost and retransmit them.
+ */
+void tcp_rack_reo_timeout(struct sock *sk)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	struct skb_mstamp now;
+	u32 timeout, prior_inflight;
+
+	skb_mstamp_get(&now);
+	prior_inflight = tcp_packets_in_flight(tp);
+	tcp_rack_detect_loss(sk, &timeout);
+	if (prior_inflight != tcp_packets_in_flight(tp)) {
+		if (inet_csk(sk)->icsk_ca_state != TCP_CA_Recovery) {
+			tcp_enter_recovery(sk, false);
+			if (!inet_csk(sk)->icsk_ca_ops->cong_control)
+				tcp_cwnd_reduction(sk, 1, 0);
+		}
+		tcp_xmit_retransmit_queue(sk);
+	}
+	if (inet_csk(sk)->icsk_pending != ICSK_TIME_RETRANS)
+		tcp_rearm_rto(sk);
 }

@@ -289,7 +289,8 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 		tp->write_seq = secure_tcpv6_sequence_number(np->saddr.s6_addr32,
 							     sk->sk_v6_daddr.s6_addr32,
 							     inet->inet_sport,
-							     inet->inet_dport);
+							     inet->inet_dport,
+							     &tp->tsoffset);
 
 	err = tcp_connect(sk);
 	if (err)
