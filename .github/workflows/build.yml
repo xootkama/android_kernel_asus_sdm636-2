@@ -10,7 +10,7 @@ jobs:
     steps:
     - name: "Checkout kernel source"                  # Clone the kernel source.
       uses: actions/checkout@v2
-    - name: "Checkout zipper"                         # (OPTIONAL) Clone the AnyKernel3 template.
+    - name: "Checkout zipper"                         # (OPTIONAL) Clone the AnyKernel3 emplate.
       uses: actions/checkout@v2
       with:
         repository: lemniskett/AnyKernel3             # Your own AnyKernel3 repository.
