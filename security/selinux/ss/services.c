@@ -1998,7 +1998,10 @@ static void security_load_policycaps(void)
 						  POLICYDB_CAPABILITY_OPENPERM);
 	selinux_policycap_alwaysnetwork = ebitmap_get_bit(&policydb.policycaps,
 						  POLICYDB_CAPABILITY_ALWAYSNETWORK);
+<<<<<<< HEAD
 
+=======
+>>>>>>> 6bf98b70459de801b1e46ad4ec7d32499219b995
 	selinux_android_netlink_route = policydb.android_netlink_route;
 	selinux_nlmsg_init();
 }
