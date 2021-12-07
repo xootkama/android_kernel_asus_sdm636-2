@@ -7,8 +7,8 @@
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 #include <linux/moduleparam.h>
-#include <linux/powersuspend.h>
 #include <linux/jiffies.h>
+#include <linux/powersuspend.h>
 #include <linux/input.h>
 #include <linux/kthread.h>
 #include <linux/slab.h>
@@ -114,6 +114,7 @@ static unsigned int io_is_busy;
 static unsigned int ignore_nice;
 
 #define GOVERNOR_NAME "pmc"
+#define FUNC_NAME cpufreq_governor_pmc
 #define CPUFR_NAME "cpufreq_pmc"
 
 /*************** End of tunables ***************/
