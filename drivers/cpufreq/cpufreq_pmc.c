@@ -114,8 +114,6 @@ static unsigned int io_is_busy;
 static unsigned int ignore_nice;
 
 #define GOVERNOR_NAME "pmc"
-#define STRUCT_NAME cpufreq_gov_pmc
-#define FUNC_NAME cpufreq_governor_pmc
 #define CPUFR_NAME "cpufreq_pmc"
 
 /*************** End of tunables ***************/
