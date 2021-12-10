@@ -97,24 +97,6 @@ else
 KBUILD_CPPFLAGS	+= -mlittle-endian
 CHECKFLAGS	+= -D__AARCH64EL__
 AS		+= -EL
-# Same as above, prefer ELF but fall back to linux target if needed.
-LDFLAGS		+= -EL $(call ld-option, -maarch64elf, -maarch64linux -z norelro)
-UTS_MACHINE	:= aarch64
-endif
-
-ifeq ($(ld-name),lld)
-KBUILD_LDFLAGS	+= -z norelro
-endif
-
-CHECKFLAGS	+= -D__aarch64__
-
-ifeq ($(CONFIG_ARM64_MODULE_CMODEL_LARGE), y)
-KBUILD_CFLAGS_MODULE	+= -mcmodel=large
-endif
-
-ifeq ($(CONFIG_ARM64_MODULE_PLTS),y)
-KBUILD_LDFLAGS_MODULE	+= -T $(srctree)/arch/arm64/kernel/module.lds
-endif
 
 # Default value
 head-y		:= arch/arm64/kernel/head.o
