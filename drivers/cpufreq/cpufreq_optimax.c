@@ -13,6 +13,7 @@
  * GNU General Public License for more details.
  *
  * Author: Joshua Seidel
+
  * Based on the smartass governor by Erasmux
  *
  * Based on the interactive governor By Mike Chan (mike@android.com)
@@ -25,7 +26,6 @@
  */
 
 #include <linux/cpu.h>
-#include <linux/module.h>
 #include <linux/cpumask.h>
 #include <linux/cpufreq.h>
 #include <linux/sched.h>
@@ -34,9 +34,10 @@
 #include <linux/workqueue.h>
 #include <linux/moduleparam.h>
 #include <asm/cputime.h>
+#include <linux/earlysuspend.h>
 
 static void (*pm_idle_old)(void);
-static atomic_t active_count = ATOMIC_INIT(0);
+static int active_count;
 
 struct optimax_info_s {
         struct cpufreq_policy *cur_policy;
@@ -96,14 +97,14 @@ static unsigned int up_min_freq;
  * to minimize wakeup issues.
  * Set sleep_max_freq=0 to disable this behavior.
  */
-#define DEFAULT_SLEEP_MAX_FREQ 384000
+#define DEFAULT_SLEEP_MAX_FREQ 200000
 static unsigned int sleep_max_freq;
 
 /*
  * The frequency to set when waking up from sleep.
  * When sleep_max_freq=0 this will have no effect.
  */
-#define DEFAULT_SLEEP_WAKEUP_FREQ 918000
+#define DEFAULT_SLEEP_WAKEUP_FREQ 800000
 static unsigned int sleep_wakeup_freq;
 
 /*
@@ -124,7 +125,7 @@ static unsigned int sample_rate_jiffies;
  * Freqeuncy delta when ramping up.
  * zero disables and causes to always jump straight to max frequency.
  */
-#define DEFAULT_RAMP_UP_STEP 224000
+#define DEFAULT_RAMP_UP_STEP 0
 static unsigned int ramp_up_step;
 
 /*
@@ -200,8 +201,8 @@ static void cpufreq_optimax_timer(unsigned long data)
         if (this_optimax->idle_exit_time == 0 || update_time == this_optimax->idle_exit_time)
                 return;
 
-        delta_idle = (now_idle - this_optimax->time_in_idle);
-        delta_time = (update_time - this_optimax->idle_exit_time);
+        delta_idle = cputime64_sub(now_idle, this_optimax->time_in_idle);
+        delta_time = cputime64_sub(update_time, this_optimax->idle_exit_time);
         //printk(KERN_INFO "optimaxT: t=%llu i=%llu\n",cputime64_sub(update_time,this_optimax->idle_exit_time),delta_idle);
 
         // If timer ran less than 1ms after short-term sample started, retry.
@@ -229,7 +230,7 @@ static void cpufreq_optimax_timer(unsigned long data)
                 if (nr_running() < 1)
                         return;
 
-                if ((update_time - this_optimax->freq_change_time) < up_rate_us)
+                if (cputime64_sub(update_time, this_optimax->freq_change_time) < up_rate_us)
                         return;
 
 
@@ -256,7 +257,7 @@ static void cpufreq_optimax_timer(unsigned long data)
          * Do not scale down unless we have been at this frequency for the
          * minimum sample time.
          */
-        if ((update_time - this_optimax->freq_change_time) < down_rate_us)
+        if (cputime64_sub(update_time, this_optimax->freq_change_time) < down_rate_us)
                 return;
 
         cpumask_set_cpu(data, &work_cpumask);
@@ -587,7 +588,43 @@ static int cpufreq_governor_optimax(struct cpufreq_policy *new_policy,
         case CPUFREQ_GOV_START:
                 if ((!cpu_online(cpu)) || (!new_policy->cur))
                         return -EINVAL;
+
+                /*
+                 * Do not register the idle hook and create sysfs
+                 * entries if we have already done so.
+                 */
+                if (++active_count <= 1) {
+                        rc = sysfs_create_group(&new_policy->kobj, &optimax_attr_group);
+                        if (rc)
+                                return rc;
+                        pm_idle_old = pm_idle;
+                        pm_idle = cpufreq_idle;
                 }
+
+                this_optimax->cur_policy = new_policy;
+                this_optimax->enable = 1;
+
+                // notice no break here!
+
+        case CPUFREQ_GOV_LIMITS:
+                optimax_update_min_max(this_optimax,new_policy,suspended);
+                if (this_optimax->cur_policy->cur != this_optimax->max_speed) {
+                        if (debug_mask & optimax_DEBUG_JUMPS)
+                                printk(KERN_INFO "optimaxI: initializing to %d\n",this_optimax->max_speed);
+                        __cpufreq_driver_target(new_policy, this_optimax->max_speed, CPUFREQ_RELATION_H);
+                }
+                break;
+
+        case CPUFREQ_GOV_STOP:
+                del_timer(&this_optimax->timer);
+                this_optimax->enable = 0;
+
+                if (++active_count > 1)
+                        return 0;
+                sysfs_remove_group(&new_policy->kobj,
+                                &optimax_attr_group);
+
+                pm_idle = pm_idle_old;
                 break;
         }
 
@@ -637,9 +674,14 @@ static void optimax_late_resume(struct early_suspend *handler) {
         suspended = 0;
         for_each_online_cpu(i)
                 optimax_suspend(i,0);
+}
+
+static struct early_suspend optimax_power_suspend = {
+        .suspend = optimax_early_suspend,
+        .resume = optimax_late_resume,
 };
 
-static int __init cpufreq_savagedzen_init(void)
+static int __init cpufreq_optimax_init(void)
 {
         unsigned int i;
         struct optimax_info_s *this_optimax;
@@ -690,6 +732,8 @@ static int __init cpufreq_savagedzen_init(void)
 
 #ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_optimax
 pure_initcall(cpufreq_optimax_init);
+#else
+module_init(cpufreq_optimax_init);
 #endif
 
 static void __exit cpufreq_optimax_exit(void)
