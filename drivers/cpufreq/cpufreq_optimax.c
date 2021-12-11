@@ -587,43 +587,7 @@ static int cpufreq_governor_optimax(struct cpufreq_policy *new_policy,
         case CPUFREQ_GOV_START:
                 if ((!cpu_online(cpu)) || (!new_policy->cur))
                         return -EINVAL;
-
-                /*
-                 * Do not register the idle hook and create sysfs
-                 * entries if we have already done so.
-                 */
-                if (atomic_inc_return(&active_count) <= 1) {
-                        rc = sysfs_create_group(&new_policy->kobj, &optimax_attr_group);
-                        if (rc)
-                                return rc;
-                        pm_idle_old = pm_idle;
-                        pm_idle = cpufreq_idle;
                 }
-
-                this_optimax->cur_policy = new_policy;
-                this_optimax->enable = 1;
-
-                // notice no break here!
-
-        case CPUFREQ_GOV_LIMITS:
-                optimax_update_min_max(this_optimax,new_policy,suspended);
-                if (this_optimax->cur_policy->cur != this_optimax->max_speed) {
-                        if (debug_mask & optimax_DEBUG_JUMPS)
-                                printk(KERN_INFO "optimaxI: initializing to %d\n",this_optimax->max_speed);
-                        __cpufreq_driver_target(new_policy, this_optimax->max_speed, CPUFREQ_RELATION_H);
-                }
-                break;
-
-        case CPUFREQ_GOV_STOP:
-                del_timer(&this_optimax->timer);
-                this_optimax->enable = 0;
-
-                if (atomic_dec_return(&active_count) > 1)
-                        return 0;
-                sysfs_remove_group(&new_policy->kobj,
-                                &optimax_attr_group);
-
-                pm_idle = pm_idle_old;
                 break;
         }
 
@@ -673,8 +637,9 @@ static void optimax_late_resume(struct early_suspend *handler) {
         suspended = 0;
         for_each_online_cpu(i)
                 optimax_suspend(i,0);
-}
+};
 
+static int __init cpufreq_savagedzen_init(void)
 {
         unsigned int i;
         struct optimax_info_s *this_optimax;
@@ -725,8 +690,6 @@ static void optimax_late_resume(struct early_suspend *handler) {
 
 #ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_optimax
 pure_initcall(cpufreq_optimax_init);
-#else
-module_init(cpufreq_optimax_init);
 #endif
 
 static void __exit cpufreq_optimax_exit(void)
