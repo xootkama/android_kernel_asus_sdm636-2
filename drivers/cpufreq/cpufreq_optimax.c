@@ -675,12 +675,6 @@ static void optimax_late_resume(struct early_suspend *handler) {
                 optimax_suspend(i,0);
 }
 
-static struct early_suspend optimax_power_suspend = {
-        .suspend = optimax_early_suspend,
-        .resume = optimax_late_resume,
-};
-
-static int __init cpufreq_optimax_init(void)
 {
         unsigned int i;
         struct optimax_info_s *this_optimax;
