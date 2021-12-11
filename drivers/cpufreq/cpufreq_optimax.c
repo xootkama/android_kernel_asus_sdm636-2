@@ -1,750 +1,582 @@
 /*
- * drivers/cpufreq/cpufreq_optimax.c
+ *  drivers/cpufreq/cpufreq_elementalx.c
  *
- * Copyright (C) 2010 Google, Inc.
+ *  Copyright (C)  2001 Russell King
+ *            (C)  2003 Venkatesh Pallipadi <venkatesh.pallipadi@intel.com>
+ *                      Jun Nakajima <jun.nakajima@intel.com>
+ *            (C)  2015 Aaron Segaert <asegaert@gmail.com>
  *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * Author: Joshua Seidel
-
- * Based on the smartass governor by Erasmux
- *
- * Based on the interactive governor By Mike Chan (mike@android.com)
- * which was adaptated to 2.6.29 kernel by Nadlabak (pavel@doshaska.net)
- *
- * requires to add
- * EXPORT_SYMBOL_GPL(nr_running);
- * at the end of kernel/sched.c
- *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
-#include <linux/cpu.h>
-#include <linux/cpumask.h>
-#include <linux/cpufreq.h>
-#include <linux/sched.h>
-#include <linux/tick.h>
-#include <linux/timer.h>
-#include <linux/workqueue.h>
-#include <linux/moduleparam.h>
-#include <asm/cputime.h>
-#include <linux/earlysuspend.h>
+#include <linux/slab.h>
+#include <linux/fb.h>
+#include <linux/msm_kgsl.h>
+#include "cpufreq_governor.h"
 
-static void (*pm_idle_old)(void);
-static int active_count;
+/* elementalx governor macros */
+#define DEF_FREQUENCY_UP_THRESHOLD		(90)
+#define DEF_FREQUENCY_DOWN_DIFFERENTIAL		(20)
+#define DEF_ACTIVE_FLOOR_FREQ			(960000)
+#define DEF_GBOOST_MIN_FREQ			(1574400)
+#define DEF_MAX_SCREEN_OFF_FREQ			(2265000)
+#define MIN_SAMPLING_RATE			(10000)
+#define DEF_SAMPLING_DOWN_FACTOR		(8)
+#define MAX_SAMPLING_DOWN_FACTOR		(20)
+#define FREQ_NEED_BURST(x)			(x < 600000 ? 1 : 0)
+#define MAX(x,y)				(x > y ? x : y)
+#define MIN(x,y)				(x < y ? x : y)
+#define TABLE_SIZE				5
 
-struct optimax_info_s {
-        struct cpufreq_policy *cur_policy;
-        struct timer_list timer;
-        u64 time_in_idle;
-        u64 idle_exit_time;
-        u64 freq_change_time;
-        u64 freq_change_time_in_idle;
-        int cur_cpu_load;
-        unsigned int force_ramp_up;
-        unsigned int enable;
-        int max_speed;
-        int min_speed;
-};
-static DEFINE_PER_CPU(struct optimax_info_s, optimax_info);
+static DEFINE_PER_CPU(struct ex_cpu_dbs_info_s, ex_cpu_dbs_info);
 
-/* Workqueues handle frequency scaling */
-static struct workqueue_struct *up_wq;
-static struct workqueue_struct *down_wq;
-static struct work_struct freq_scale_work;
+static unsigned int up_threshold_level[2] __read_mostly = {95, 85};
+static struct cpufreq_frequency_table *tbl = NULL;
+static unsigned int *tblmap[TABLE_SIZE] __read_mostly;
+static unsigned int tbl_select[4];
 
-static cpumask_t work_cpumask;
-static unsigned int suspended;
-
-enum {
-        optimax_DEBUG_JUMPS=1,
-        optimax_DEBUG_LOAD=2
+static struct ex_governor_data {
+	unsigned int active_floor_freq;
+	unsigned int max_screen_off_freq;
+	unsigned int prev_load;
+	unsigned int g_count;
+	bool suspended;
+	struct notifier_block notif;
+} ex_data = {
+	.active_floor_freq = DEF_ACTIVE_FLOOR_FREQ,
+	.max_screen_off_freq = DEF_MAX_SCREEN_OFF_FREQ,
+	.prev_load = 0,
+	.g_count = 0,
+	.suspended = false
 };
 
-/*
- * Combination of the above debug flags.
- */
-static unsigned long debug_mask;
+static void dbs_init_freq_map_table(void)
+{
+	unsigned int min_diff, top1, top2;
+	int cnt, i, j;
+	struct cpufreq_policy *policy;
 
-/*
- * The minimum amount of time to spend at a frequency before we can ramp up.
- */
-#define DEFAULT_UP_RATE_US 12000;
-static unsigned long up_rate_us;
+	policy = cpufreq_cpu_get(0);
+	tbl = cpufreq_frequency_get_table(0);
+	min_diff = policy->cpuinfo.max_freq;
 
-/*
- * The minimum amount of time to spend at a frequency before we can ramp down.
- */
-#define DEFAULT_DOWN_RATE_US 24000;
-static unsigned long down_rate_us;
+	for (cnt = 0; (tbl[cnt].frequency != CPUFREQ_TABLE_END); cnt++) {
+		if (cnt > 0)
+			min_diff = MIN(tbl[cnt].frequency - tbl[cnt-1].frequency, min_diff);
+	}
 
-/*
- * When ramping up frequency with no idle cycles jump to at least this frequency.
- * Zero disables. Set a very high value to jump to policy max freqeuncy.
- */
-#define DEFAULT_UP_MIN_FREQ 0
-static unsigned int up_min_freq;
+	top1 = (policy->cpuinfo.max_freq + policy->cpuinfo.min_freq) / 2;
+	top2 = (policy->cpuinfo.max_freq + top1) / 2;
 
-/*
- * When sleep_max_freq>0 the frequency when suspended will be capped
- * by this frequency. Also will wake up at max frequency of policy
- * to minimize wakeup issues.
- * Set sleep_max_freq=0 to disable this behavior.
- */
-#define DEFAULT_SLEEP_MAX_FREQ 200000
-static unsigned int sleep_max_freq;
+	for (i = 0; i < TABLE_SIZE; i++) {
+		tblmap[i] = kmalloc(sizeof(unsigned int) * cnt, GFP_KERNEL);
+		BUG_ON(!tblmap[i]);
+		for (j = 0; j < cnt; j++)
+			tblmap[i][j] = tbl[j].frequency;
+	}
 
-/*
- * The frequency to set when waking up from sleep.
- * When sleep_max_freq=0 this will have no effect.
- */
-#define DEFAULT_SLEEP_WAKEUP_FREQ 800000
-static unsigned int sleep_wakeup_freq;
+	for (j = 0; j < cnt; j++) {
+		if (tbl[j].frequency < top1) {
+			tblmap[0][j] += MAX((top1 - tbl[j].frequency)/3, min_diff);
+		}
 
-/*
- * When awake_min_freq>0 the frequency when not suspended will not
- * go below this frequency.
- * Set awake_min_freq=0 to disable this behavior.
- */
-#define DEFAULT_AWAKE_MIN_FREQ 0
-static unsigned int awake_min_freq;
+		if (tbl[j].frequency < top2) {
+			tblmap[1][j] += MAX((top2 - tbl[j].frequency)/3, min_diff);
+			tblmap[2][j] += MAX(((top2 - tbl[j].frequency)*2)/5, min_diff);
+			tblmap[3][j] += MAX((top2 - tbl[j].frequency)/2, min_diff);
+		} else {
+			tblmap[3][j] += MAX((policy->cpuinfo.max_freq - tbl[j].frequency)/3, min_diff);
+		}
 
-/*
- * Sampling rate, I highly recommend to leave it at 2.
- */
-#define DEFAULT_SAMPLE_RATE_JIFFIES 2
-static unsigned int sample_rate_jiffies;
+		tblmap[4][j] += MAX((policy->cpuinfo.max_freq - tbl[j].frequency)/2, min_diff);
+	}
 
-/*
- * Freqeuncy delta when ramping up.
- * zero disables and causes to always jump straight to max frequency.
- */
-#define DEFAULT_RAMP_UP_STEP 0
-static unsigned int ramp_up_step;
+	tbl_select[0] = 0;
+	tbl_select[1] = 1;
+	tbl_select[2] = 2;
+	tbl_select[3] = 4;
+}
 
-/*
- * Freqeuncy delta when ramping down.
- * zero disables and will calculate ramp down according to load heuristic.
- */
-#define DEFAULT_RAMP_DOWN_STEP 0
-static unsigned int ramp_down_step;
+static void dbs_deinit_freq_map_table(void)
+{
+	int i;
 
-/*
- * CPU freq will be increased if measured load > max_cpu_load;
- */
-#define DEFAULT_MAX_CPU_LOAD 65
-static unsigned long max_cpu_load;
+	if (!tbl)
+		return;
 
-/*
- * CPU freq will be decreased if measured load < min_cpu_load;
- */
-#define DEFAULT_MIN_CPU_LOAD 50
-static unsigned long min_cpu_load;
+	tbl = NULL;
 
+	for (i = 0; i < TABLE_SIZE; i++)
+		kfree(tblmap[i]);
+}
 
-static int cpufreq_governor_optimax(struct cpufreq_policy *policy,
-                unsigned int event);
+static inline int get_cpu_freq_index(unsigned int freq)
+{
+	static int saved_index = 0;
+	int index;
 
-#ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_optimax
+	if (!tbl) {
+		pr_warn("tbl is NULL, use previous value %d\n", saved_index);
+		return saved_index;
+	}
+
+	for (index = 0; (tbl[index].frequency != CPUFREQ_TABLE_END); index++) {
+		if (tbl[index].frequency >= freq) {
+			saved_index = index;
+			break;
+		}
+	}
+
+	return index;
+}
+
+static inline unsigned int ex_freq_increase(struct cpufreq_policy *p, unsigned int freq)
+{
+	if (freq > p->max) {
+		return p->max;
+	} 
+	
+	else if (ex_data.suspended) {
+		freq = MIN(freq, ex_data.max_screen_off_freq);
+	}
+
+	return freq;
+}
+
+static void ex_check_cpu(int cpu, unsigned int load)
+{
+	struct ex_cpu_dbs_info_s *dbs_info = &per_cpu(ex_cpu_dbs_info, cpu);
+	struct cpufreq_policy *policy = dbs_info->cdbs.cur_policy;
+	struct dbs_data *dbs_data = policy->governor_data;
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int max_load_freq = 0, freq_next = 0;
+	unsigned int j, avg_load, cur_freq, max_freq, target_freq = 0;
+
+	cpufreq_notify_utilization(policy, load);
+
+	cur_freq = policy->cur;
+	max_freq = policy->max;
+
+	for_each_cpu(j, policy->cpus) {
+		if (load > max_load_freq)
+			max_load_freq = load * policy->cur;
+	}
+	avg_load = (ex_data.prev_load + load) >> 1;
+
+	if (ex_tuners->gboost) {
+		if (ex_data.g_count < 500 && graphics_boost < 3)
+			++ex_data.g_count;
+		else if (ex_data.g_count > 1)
+			--ex_data.g_count;
+	}
+
+	//gboost mode
+	if (ex_tuners->gboost && ex_data.g_count > 300) {
+				
+		if (avg_load > 40 + (graphics_boost * 10)) {
+			freq_next = max_freq;
+		} else {
+			freq_next = max_freq * avg_load / 100;
+			freq_next = MAX(freq_next, ex_tuners->gboost_min_freq);
+		}
+
+		target_freq = ex_freq_increase(policy, freq_next);
+
+		__cpufreq_driver_target(policy, target_freq, CPUFREQ_RELATION_H);
+
+		goto finished;
+	} 
+
+	//normal mode
+	if (max_load_freq > up_threshold_level[1] * cur_freq) {
+		int index = get_cpu_freq_index(cur_freq);
+
+		if (FREQ_NEED_BURST(cur_freq) &&
+				load > up_threshold_level[0]) {
+			freq_next = max_freq;
+		}
+		
+		else if (avg_load > up_threshold_level[0]) {
+			freq_next = tblmap[tbl_select[3]][index];
+		}
+		
+		else if (avg_load <= up_threshold_level[1]) {
+			freq_next = tblmap[tbl_select[1]][index];
+		}
+	
+		else {
+			if (load > up_threshold_level[0]) {
+				freq_next = tblmap[tbl_select[3]][index];
+			}
+		
+			else {
+				freq_next = tblmap[tbl_select[2]][index];
+			}
+		}
+
+		target_freq = ex_freq_increase(policy, freq_next);
+
+		__cpufreq_driver_target(policy, target_freq, CPUFREQ_RELATION_H);
+
+		if (target_freq > ex_data.active_floor_freq)
+			dbs_info->down_floor = 0;
+
+		goto finished;
+	}
+
+	if (cur_freq == policy->min)
+		goto finished;
+
+	if (cur_freq >= ex_data.active_floor_freq) {
+		if (++dbs_info->down_floor > ex_tuners->sampling_down_factor)
+			dbs_info->down_floor = 0;
+	} else {
+		dbs_info->down_floor = 0;
+	}
+
+	if (max_load_freq <
+	    (ex_tuners->up_threshold - ex_tuners->down_differential) *
+	     cur_freq) {
+
+		freq_next = max_load_freq /
+				(ex_tuners->up_threshold -
+				 ex_tuners->down_differential);
+
+		if (dbs_info->down_floor && !ex_data.suspended) {
+			freq_next = MAX(freq_next, ex_data.active_floor_freq);
+		} else {
+			freq_next = MAX(freq_next, policy->min);
+			if (freq_next < ex_data.active_floor_freq)
+				dbs_info->down_floor = ex_tuners->sampling_down_factor;
+		}
+
+		__cpufreq_driver_target(policy, freq_next,
+			CPUFREQ_RELATION_L);
+	}
+
+finished:
+	ex_data.prev_load = load;
+	return;
+}
+
+static void ex_dbs_timer(struct work_struct *work)
+{
+	struct ex_cpu_dbs_info_s *dbs_info = container_of(work,
+			struct ex_cpu_dbs_info_s, cdbs.work.work);
+	unsigned int cpu = dbs_info->cdbs.cur_policy->cpu;
+	struct ex_cpu_dbs_info_s *core_dbs_info = &per_cpu(ex_cpu_dbs_info,
+			cpu);
+	struct dbs_data *dbs_data = dbs_info->cdbs.cur_policy->governor_data;
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	int delay = delay_for_sampling_rate(ex_tuners->sampling_rate);
+	bool modify_all = true;
+
+	mutex_lock(&core_dbs_info->cdbs.timer_mutex);
+	if (!need_load_eval(&core_dbs_info->cdbs, ex_tuners->sampling_rate))
+		modify_all = false;
+	else
+		dbs_check_cpu(dbs_data, cpu);
+
+	gov_queue_work(dbs_data, dbs_info->cdbs.cur_policy, delay, modify_all);
+	mutex_unlock(&core_dbs_info->cdbs.timer_mutex);
+}
+
+static int fb_notifier_callback(struct notifier_block *this,
+				unsigned long event, void *data)
+{
+	struct fb_event *evdata = data;
+	int *blank;
+
+	if (evdata && evdata->data && event == FB_EVENT_BLANK) {
+		blank = evdata->data;
+		switch (*blank) {
+			case FB_BLANK_UNBLANK:
+				//display on
+				ex_data.suspended = false;
+				break;
+			case FB_BLANK_POWERDOWN:
+			case FB_BLANK_HSYNC_SUSPEND:
+			case FB_BLANK_VSYNC_SUSPEND:
+			case FB_BLANK_NORMAL:
+				//display off
+				ex_data.suspended = true;
+				break;
+		}
+	}
+
+	return NOTIFY_OK;
+}
+
+/************************** sysfs interface ************************/
+static struct common_dbs_data ex_dbs_cdata;
+
+static ssize_t store_sampling_rate(struct dbs_data *dbs_data, const char *buf,
+		size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1)
+		return -EINVAL;
+
+	ex_tuners->sampling_rate = max(input, dbs_data->min_sampling_rate);
+	return count;
+}
+
+static ssize_t store_up_threshold(struct dbs_data *dbs_data, const char *buf,
+		size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1 || input > 100 || input <= ex_tuners->down_differential)
+		return -EINVAL;
+
+	ex_tuners->up_threshold = input;
+	return count;
+}
+
+static ssize_t store_down_differential(struct dbs_data *dbs_data,
+		const char *buf, size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1 || input > 100 || input >= ex_tuners->up_threshold)
+		return -EINVAL;
+
+	ex_tuners->down_differential = input;
+	return count;
+}
+
+static ssize_t store_gboost(struct dbs_data *dbs_data, const char *buf,
+		size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1 || input > 1)
+		return -EINVAL;
+
+	if (input == 0)
+		ex_data.g_count = 0;
+
+	ex_tuners->gboost = input;
+	return count;
+}
+
+static ssize_t store_gboost_min_freq(struct dbs_data *dbs_data,
+		const char *buf, size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1)
+		return -EINVAL;
+
+	ex_tuners->gboost_min_freq = input;
+	return count;
+}
+
+static ssize_t store_active_floor_freq(struct dbs_data *dbs_data,
+		const char *buf, size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1)
+		return -EINVAL;
+
+	ex_tuners->active_floor_freq = input;
+	ex_data.active_floor_freq = ex_tuners->active_floor_freq;
+	return count;
+}
+
+static ssize_t store_max_screen_off_freq(struct dbs_data *dbs_data,
+		const char *buf, size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1)
+		return -EINVAL;
+
+	if (input == 0)
+		input = UINT_MAX;
+
+	ex_tuners->max_screen_off_freq = input;
+	ex_data.max_screen_off_freq = ex_tuners->max_screen_off_freq;
+	return count;
+}
+
+static ssize_t store_sampling_down_factor(struct dbs_data *dbs_data,
+		const char *buf, size_t count)
+{
+	struct ex_dbs_tuners *ex_tuners = dbs_data->tuners;
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+
+	if (ret != 1 || input > MAX_SAMPLING_DOWN_FACTOR || input < 0)
+		return -EINVAL;
+
+	ex_tuners->sampling_down_factor = input;
+	return count;
+}
+
+show_store_one(ex, sampling_rate);
+show_store_one(ex, up_threshold);
+show_store_one(ex, down_differential);
+show_store_one(ex, gboost);
+show_store_one(ex, gboost_min_freq);
+show_store_one(ex, active_floor_freq);
+show_store_one(ex, max_screen_off_freq);
+show_store_one(ex, sampling_down_factor);
+declare_show_sampling_rate_min(ex);
+
+gov_sys_pol_attr_rw(sampling_rate);
+gov_sys_pol_attr_rw(up_threshold);
+gov_sys_pol_attr_rw(down_differential);
+gov_sys_pol_attr_rw(gboost);
+gov_sys_pol_attr_rw(gboost_min_freq);
+gov_sys_pol_attr_rw(active_floor_freq);
+gov_sys_pol_attr_rw(max_screen_off_freq);
+gov_sys_pol_attr_rw(sampling_down_factor);
+gov_sys_pol_attr_ro(sampling_rate_min);
+
+static struct attribute *dbs_attributes_gov_sys[] = {
+	&sampling_rate_min_gov_sys.attr,
+	&sampling_rate_gov_sys.attr,
+	&up_threshold_gov_sys.attr,
+	&down_differential_gov_sys.attr,
+	&gboost_gov_sys.attr,
+	&gboost_min_freq_gov_sys.attr,
+	&active_floor_freq_gov_sys.attr,
+	&max_screen_off_freq_gov_sys.attr,
+	&sampling_down_factor_gov_sys.attr,
+	NULL
+};
+
+static struct attribute_group ex_attr_group_gov_sys = {
+	.attrs = dbs_attributes_gov_sys,
+	.name = "elementalx",
+};
+
+static struct attribute *dbs_attributes_gov_pol[] = {
+	&sampling_rate_min_gov_pol.attr,
+	&sampling_rate_gov_pol.attr,
+	&up_threshold_gov_pol.attr,
+	&down_differential_gov_pol.attr,
+	&gboost_gov_pol.attr,
+	&gboost_min_freq_gov_pol.attr,
+	&active_floor_freq_gov_pol.attr,
+	&max_screen_off_freq_gov_pol.attr,
+	&sampling_down_factor_gov_pol.attr,
+	NULL
+};
+
+static struct attribute_group ex_attr_group_gov_pol = {
+	.attrs = dbs_attributes_gov_pol,
+	.name = "elementalx",
+};
+
+/************************** sysfs end ************************/
+
+static int ex_init(struct dbs_data *dbs_data)
+{
+	struct ex_dbs_tuners *tuners;
+
+	tuners = kzalloc(sizeof(*tuners), GFP_KERNEL);
+	if (!tuners) {
+		pr_err("%s: kzalloc failed\n", __func__);
+		return -ENOMEM;
+	}
+
+	tuners->up_threshold = DEF_FREQUENCY_UP_THRESHOLD;
+	tuners->down_differential = DEF_FREQUENCY_DOWN_DIFFERENTIAL;
+	tuners->ignore_nice_load = 0;
+	tuners->gboost = 1;
+	tuners->gboost_min_freq = DEF_GBOOST_MIN_FREQ;
+	tuners->active_floor_freq = DEF_ACTIVE_FLOOR_FREQ;
+	tuners->max_screen_off_freq = DEF_MAX_SCREEN_OFF_FREQ;
+	tuners->sampling_down_factor = DEF_SAMPLING_DOWN_FACTOR;
+
+	dbs_data->tuners = tuners;
+	dbs_data->min_sampling_rate = MIN_SAMPLING_RATE;
+
+	dbs_init_freq_map_table();
+
+	ex_data.notif.notifier_call = fb_notifier_callback;
+	if (fb_register_client(&ex_data.notif))
+		pr_err("%s: Failed to register fb_notifier\n", __func__);
+
+	mutex_init(&dbs_data->mutex);
+	return 0;
+}
+
+static void ex_exit(struct dbs_data *dbs_data)
+{
+	dbs_deinit_freq_map_table();
+	fb_unregister_client(&ex_data.notif);
+	kfree(dbs_data->tuners);
+}
+
+define_get_cpu_dbs_routines(ex_cpu_dbs_info);
+
+static struct common_dbs_data ex_dbs_cdata = {
+	.governor = GOV_ELEMENTALX,
+	.attr_group_gov_sys = &ex_attr_group_gov_sys,
+	.attr_group_gov_pol = &ex_attr_group_gov_pol,
+	.get_cpu_cdbs = get_cpu_cdbs,
+	.get_cpu_dbs_info_s = get_cpu_dbs_info_s,
+	.gov_dbs_timer = ex_dbs_timer,
+	.gov_check_cpu = ex_check_cpu,
+	.init = ex_init,
+	.exit = ex_exit,
+};
+
+static int ex_cpufreq_governor_dbs(struct cpufreq_policy *policy,
+				   unsigned int event)
+{
+	return cpufreq_governor_dbs(policy, &ex_dbs_cdata, event);
+}
+
+#ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_ELEMENTALX
 static
 #endif
-struct cpufreq_governor cpufreq_gov_optimax = {
-        .name = "optimax",
-        .governor = cpufreq_governor_optimax,
-        .max_transition_latency = 9000000,
-        .owner = THIS_MODULE,
+struct cpufreq_governor cpufreq_gov_elementalx = {
+	.name			= "elementalx",
+	.governor		= ex_cpufreq_governor_dbs,
+	.max_transition_latency	= TRANSITION_LATENCY_LIMIT,
+	.owner			= THIS_MODULE,
 };
 
-static void optimax_update_min_max(struct optimax_info_s *this_optimax, struct cpufreq_policy *policy, int suspend) {
-        if (suspend) {
-                this_optimax->min_speed = policy->min;
-                this_optimax->max_speed = // sleep_max_freq; but make sure it obeys the policy min/max
-                        policy->max > sleep_max_freq ? (sleep_max_freq > policy->min ? sleep_max_freq : policy->min) : policy->max;
-        } else {
-                this_optimax->min_speed = // awake_min_freq; but make sure it obeys the policy min/max
-                        policy->min < awake_min_freq ? (awake_min_freq < policy->max ? awake_min_freq : policy->max) : policy->min;
-                this_optimax->max_speed = policy->max;
-        }
-}
-
-inline static unsigned int validate_freq(struct optimax_info_s *this_optimax, int freq) {
-        if (freq > this_optimax->max_speed)
-                return this_optimax->max_speed;
-        if (freq < this_optimax->min_speed)
-                return this_optimax->min_speed;
-        return freq;
-}
-
-static void reset_timer(unsigned long cpu, struct optimax_info_s *this_optimax) {
-  this_optimax->time_in_idle = get_cpu_idle_time_us(cpu, &this_optimax->idle_exit_time);
-  mod_timer(&this_optimax->timer, jiffies + sample_rate_jiffies);
-}
-
-static void cpufreq_optimax_timer(unsigned long data)
+static int __init cpufreq_gov_dbs_init(void)
 {
-        u64 delta_idle;
-        u64 delta_time;
-        int cpu_load;
-        u64 update_time;
-        u64 now_idle;
-        struct optimax_info_s *this_optimax = &per_cpu(optimax_info, data);
-        struct cpufreq_policy *policy = this_optimax->cur_policy;
-
-        now_idle = get_cpu_idle_time_us(data, &update_time);
-
-        if (this_optimax->idle_exit_time == 0 || update_time == this_optimax->idle_exit_time)
-                return;
-
-        delta_idle = cputime64_sub(now_idle, this_optimax->time_in_idle);
-        delta_time = cputime64_sub(update_time, this_optimax->idle_exit_time);
-        //printk(KERN_INFO "optimaxT: t=%llu i=%llu\n",cputime64_sub(update_time,this_optimax->idle_exit_time),delta_idle);
-
-        // If timer ran less than 1ms after short-term sample started, retry.
-        if (delta_time < 1000) {
-                if (!timer_pending(&this_optimax->timer))
-                        reset_timer(data,this_optimax);
-                return;
-        }
-
-        if (delta_idle > delta_time)
-                cpu_load = 0;
-        else
-                cpu_load = 100 * (unsigned int)(delta_time - delta_idle) / (unsigned int)delta_time;
-
-        if (debug_mask & optimax_DEBUG_LOAD)
-                printk(KERN_INFO "optimaxT @ %d: load %d (delta_time %llu)\n",policy->cur,cpu_load,delta_time);
-
-        this_optimax->cur_cpu_load = cpu_load;
-
-        // Scale up if load is above max or if there where no idle cycles since coming out of idle.
-        if (cpu_load > max_cpu_load || delta_idle == 0) {
-                if (policy->cur == policy->max)
-                        return;
-
-                if (nr_running() < 1)
-                        return;
-
-                if (cputime64_sub(update_time, this_optimax->freq_change_time) < up_rate_us)
-                        return;
-
-
-                this_optimax->force_ramp_up = 1;
-                cpumask_set_cpu(data, &work_cpumask);
-                queue_work(up_wq, &freq_scale_work);
-                return;
-        }
-
-        /*
-         * There is a window where if the cpu utlization can go from low to high
-         * between the timer expiring, delta_idle will be > 0 and the cpu will
-         * be 100% busy, preventing idle from running, and this timer from
-         * firing. So setup another timer to fire to check cpu utlization.
-         * Do not setup the timer if there is no scheduled work or if at max speed.
-         */
-        if (policy->cur < this_optimax->max_speed && !timer_pending(&this_optimax->timer) && nr_running() > 0)
-                reset_timer(data,this_optimax);
-
-        if (policy->cur == policy->min)
-                return;
-
-        /*
-         * Do not scale down unless we have been at this frequency for the
-         * minimum sample time.
-         */
-        if (cputime64_sub(update_time, this_optimax->freq_change_time) < down_rate_us)
-                return;
-
-        cpumask_set_cpu(data, &work_cpumask);
-        queue_work(down_wq, &freq_scale_work);
+	return cpufreq_register_governor(&cpufreq_gov_elementalx);
 }
 
-static void cpufreq_idle(void)
+static void __exit cpufreq_gov_dbs_exit(void)
 {
-        struct optimax_info_s *this_optimax = &per_cpu(optimax_info, smp_processor_id());
-        struct cpufreq_policy *policy = this_optimax->cur_policy;
-
-        if (!this_optimax->enable) {
-                pm_idle_old();
-                return;
-        }
-
-        if (policy->cur == this_optimax->min_speed && timer_pending(&this_optimax->timer))
-                del_timer(&this_optimax->timer);
-
-        pm_idle_old();
-
-        if (!timer_pending(&this_optimax->timer))
-                reset_timer(smp_processor_id(), this_optimax);
+	cpufreq_unregister_governor(&cpufreq_gov_elementalx);
 }
 
-/* We use the same work function to sale up and down */
-static void cpufreq_optimax_freq_change_time_work(struct work_struct *work)
-{
-        unsigned int cpu;
-        int new_freq;
-        unsigned int force_ramp_up;
-        int cpu_load;
-        struct optimax_info_s *this_optimax;
-        struct cpufreq_policy *policy;
-        unsigned int relation = CPUFREQ_RELATION_L;
-        cpumask_t tmp_mask = work_cpumask;
-        for_each_cpu(cpu, &tmp_mask) {
-                this_optimax = &per_cpu(optimax_info, cpu);
-                policy = this_optimax->cur_policy;
-                cpu_load = this_optimax->cur_cpu_load;
-                force_ramp_up = this_optimax->force_ramp_up && nr_running() > 1;
-                this_optimax->force_ramp_up = 0;
-
-                if (force_ramp_up || cpu_load > max_cpu_load) {
-                        if (force_ramp_up && up_min_freq) {
-                                new_freq = up_min_freq;
-                                relation = CPUFREQ_RELATION_L;
-                        } else if (ramp_up_step) {
-                                new_freq = policy->cur + ramp_up_step;
-                                relation = CPUFREQ_RELATION_H;
-                        } else {
-                                new_freq = this_optimax->max_speed;
-                                relation = CPUFREQ_RELATION_H;
-                        }
-                }
-                else if (cpu_load < min_cpu_load) {
-                        if (ramp_down_step)
-                                new_freq = policy->cur - ramp_down_step;
-                        else {
-                                cpu_load += 100 - max_cpu_load; // dummy load.
-                                new_freq = policy->cur * cpu_load / 100;
-                        }
-                        relation = CPUFREQ_RELATION_L;
-                }
-                else new_freq = policy->cur;
-
-                new_freq = validate_freq(this_optimax,new_freq);
-
-                if (new_freq != policy->cur) {
-                        if (debug_mask & optimax_DEBUG_JUMPS)
-                                printk(KERN_INFO "optimaxQ: jumping from %d to %d\n",policy->cur,new_freq);
-
-                        __cpufreq_driver_target(policy, new_freq, relation);
-
-                        this_optimax->freq_change_time_in_idle =
-                                get_cpu_idle_time_us(cpu,&this_optimax->freq_change_time);
-                }
-
-                cpumask_clear_cpu(cpu, &work_cpumask);
-        }
-}
-
-static ssize_t show_debug_mask(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%lu\n", debug_mask);
-}
-
-static ssize_t store_debug_mask(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0)
-          debug_mask = input;
-        return res;
-}
-
-static struct freq_attr debug_mask_attr = __ATTR(debug_mask, 0644,
-                show_debug_mask, store_debug_mask);
-
-static ssize_t show_up_rate_us(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%lu\n", up_rate_us);
-}
-
-static ssize_t store_up_rate_us(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0 && input <= 100000000)
-          up_rate_us = input;
-        return res;
-}
-
-static struct freq_attr up_rate_us_attr = __ATTR(up_rate_us, 0644,
-                show_up_rate_us, store_up_rate_us);
-
-static ssize_t show_down_rate_us(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%lu\n", down_rate_us);
-}
-
-static ssize_t store_down_rate_us(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0 && input <= 100000000)
-          down_rate_us = input;
-        return res;
-}
-
-static struct freq_attr down_rate_us_attr = __ATTR(down_rate_us, 0644,
-                show_down_rate_us, store_down_rate_us);
-
-static ssize_t show_up_min_freq(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%u\n", up_min_freq);
-}
-
-static ssize_t store_up_min_freq(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0)
-          up_min_freq = input;
-        return res;
-}
-
-static struct freq_attr up_min_freq_attr = __ATTR(up_min_freq, 0644,
-                show_up_min_freq, store_up_min_freq);
-
-static ssize_t show_sleep_max_freq(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%u\n", sleep_max_freq);
-}
-
-static ssize_t store_sleep_max_freq(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0)
-          sleep_max_freq = input;
-        return res;
-}
-
-static struct freq_attr sleep_max_freq_attr = __ATTR(sleep_max_freq, 0644,
-                show_sleep_max_freq, store_sleep_max_freq);
-
-static ssize_t show_sleep_wakeup_freq(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%u\n", sleep_wakeup_freq);
-}
-
-static ssize_t store_sleep_wakeup_freq(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0)
-          sleep_wakeup_freq = input;
-        return res;
-}
-
-static struct freq_attr sleep_wakeup_freq_attr = __ATTR(sleep_wakeup_freq, 0644,
-                show_sleep_wakeup_freq, store_sleep_wakeup_freq);
-
-static ssize_t show_awake_min_freq(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%u\n", awake_min_freq);
-}
-
-static ssize_t store_awake_min_freq(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0)
-          awake_min_freq = input;
-        return res;
-}
-
-static struct freq_attr awake_min_freq_attr = __ATTR(awake_min_freq, 0644,
-                show_awake_min_freq, store_awake_min_freq);
-
-static ssize_t show_sample_rate_jiffies(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%u\n", sample_rate_jiffies);
-}
-
-static ssize_t store_sample_rate_jiffies(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input > 0 && input <= 1000)
-          sample_rate_jiffies = input;
-        return res;
-}
-
-static struct freq_attr sample_rate_jiffies_attr = __ATTR(sample_rate_jiffies, 0644,
-                show_sample_rate_jiffies, store_sample_rate_jiffies);
-
-static ssize_t show_ramp_up_step(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%u\n", ramp_up_step);
-}
-
-static ssize_t store_ramp_up_step(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0)
-          ramp_up_step = input;
-        return res;
-}
-
-static struct freq_attr ramp_up_step_attr = __ATTR(ramp_up_step, 0644,
-                show_ramp_up_step, store_ramp_up_step);
-
-static ssize_t show_ramp_down_step(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%u\n", ramp_down_step);
-}
-
-static ssize_t store_ramp_down_step(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input >= 0)
-          ramp_down_step = input;
-        return res;
-}
-
-static struct freq_attr ramp_down_step_attr = __ATTR(ramp_down_step, 0644,
-                show_ramp_down_step, store_ramp_down_step);
-
-static ssize_t show_max_cpu_load(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%lu\n", max_cpu_load);
-}
-
-static ssize_t store_max_cpu_load(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input > 0 && input <= 100)
-          max_cpu_load = input;
-        return res;
-}
-
-static struct freq_attr max_cpu_load_attr = __ATTR(max_cpu_load, 0644,
-                show_max_cpu_load, store_max_cpu_load);
-
-static ssize_t show_min_cpu_load(struct cpufreq_policy *policy, char *buf)
-{
-        return sprintf(buf, "%lu\n", min_cpu_load);
-}
-
-static ssize_t store_min_cpu_load(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-        ssize_t res;
-        unsigned long input;
-        res = strict_strtoul(buf, 0, &input);
-        if (res >= 0 && input > 0 && input < 100)
-          min_cpu_load = input;
-        return res;
-}
-
-static struct freq_attr min_cpu_load_attr = __ATTR(min_cpu_load, 0644,
-                show_min_cpu_load, store_min_cpu_load);
-
-static struct attribute * optimax_attributes[] = {
-        &debug_mask_attr.attr,
-        &up_rate_us_attr.attr,
-        &down_rate_us_attr.attr,
-        &up_min_freq_attr.attr,
-        &sleep_max_freq_attr.attr,
-        &sleep_wakeup_freq_attr.attr,
-        &awake_min_freq_attr.attr,
-        &sample_rate_jiffies_attr.attr,
-        &ramp_up_step_attr.attr,
-        &ramp_down_step_attr.attr,
-        &max_cpu_load_attr.attr,
-        &min_cpu_load_attr.attr,
-        NULL,
-};
-
-static struct attribute_group optimax_attr_group = {
-        .attrs = optimax_attributes,
-        .name = "optimax",
-};
-
-static int cpufreq_governor_optimax(struct cpufreq_policy *new_policy,
-                unsigned int event)
-{
-        unsigned int cpu = new_policy->cpu;
-        int rc;
-        struct optimax_info_s *this_optimax = &per_cpu(optimax_info, cpu);
-
-        switch (event) {
-        case CPUFREQ_GOV_START:
-                if ((!cpu_online(cpu)) || (!new_policy->cur))
-                        return -EINVAL;
-
-                /*
-                 * Do not register the idle hook and create sysfs
-                 * entries if we have already done so.
-                 */
-                if (++active_count <= 1) {
-                        rc = sysfs_create_group(&new_policy->kobj, &optimax_attr_group);
-                        if (rc)
-                                return rc;
-                        pm_idle_old = pm_idle;
-                        pm_idle = cpufreq_idle;
-                }
-
-                this_optimax->cur_policy = new_policy;
-                this_optimax->enable = 1;
-
-                // notice no break here!
-
-        case CPUFREQ_GOV_LIMITS:
-                optimax_update_min_max(this_optimax,new_policy,suspended);
-                if (this_optimax->cur_policy->cur != this_optimax->max_speed) {
-                        if (debug_mask & optimax_DEBUG_JUMPS)
-                                printk(KERN_INFO "optimaxI: initializing to %d\n",this_optimax->max_speed);
-                        __cpufreq_driver_target(new_policy, this_optimax->max_speed, CPUFREQ_RELATION_H);
-                }
-                break;
-
-        case CPUFREQ_GOV_STOP:
-                del_timer(&this_optimax->timer);
-                this_optimax->enable = 0;
-
-                if (++active_count > 1)
-                        return 0;
-                sysfs_remove_group(&new_policy->kobj,
-                                &optimax_attr_group);
-
-                pm_idle = pm_idle_old;
-                break;
-        }
-
-        return 0;
-}
-
-static void optimax_suspend(int cpu, int suspend)
-{
-        struct optimax_info_s *this_optimax = &per_cpu(optimax_info, smp_processor_id());
-        struct cpufreq_policy *policy = this_optimax->cur_policy;
-        unsigned int new_freq;
-
-        if (!this_optimax->enable || sleep_max_freq==0) // disable behavior for sleep_max_freq==0
-                return;
-
-        optimax_update_min_max(this_optimax,policy,suspend);
-        if (suspend) {
-            if (policy->cur > this_optimax->max_speed) {
-                    new_freq = this_optimax->max_speed;
-
-                    if (debug_mask & optimax_DEBUG_JUMPS)
-                            printk(KERN_INFO "optimaxS: suspending at %d\n",new_freq);
-
-                    __cpufreq_driver_target(policy, new_freq,
-                                            CPUFREQ_RELATION_H);
-            }
-        } else { // resume at max speed:
-                new_freq = validate_freq(this_optimax,sleep_wakeup_freq);
-
-                if (debug_mask & optimax_DEBUG_JUMPS)
-                        printk(KERN_INFO "optimaxS: awaking at %d\n",new_freq);
-
-                __cpufreq_driver_target(policy, new_freq,
-                                        CPUFREQ_RELATION_L);
-        }
-}
-
-static void optimax_early_suspend(struct early_suspend *handler) {
-        int i;
-        suspended = 1;
-        for_each_online_cpu(i)
-                optimax_suspend(i,1);
-}
-
-static void optimax_late_resume(struct early_suspend *handler) {
-        int i;
-        suspended = 0;
-        for_each_online_cpu(i)
-                optimax_suspend(i,0);
-}
-
-static struct early_suspend optimax_power_suspend = {
-        .suspend = optimax_early_suspend,
-        .resume = optimax_late_resume,
-};
-
-static int __init cpufreq_optimax_init(void)
-{
-        unsigned int i;
-        struct optimax_info_s *this_optimax;
-        debug_mask = 0;
-        up_rate_us = DEFAULT_UP_RATE_US;
-        down_rate_us = DEFAULT_DOWN_RATE_US;
-        up_min_freq = DEFAULT_UP_MIN_FREQ;
-        sleep_max_freq = DEFAULT_SLEEP_MAX_FREQ;
-        sleep_wakeup_freq = DEFAULT_SLEEP_WAKEUP_FREQ;
-        awake_min_freq = DEFAULT_AWAKE_MIN_FREQ;
-        sample_rate_jiffies = DEFAULT_SAMPLE_RATE_JIFFIES;
-        ramp_up_step = DEFAULT_RAMP_UP_STEP;
-        ramp_down_step = DEFAULT_RAMP_DOWN_STEP;
-        max_cpu_load = DEFAULT_MAX_CPU_LOAD;
-        min_cpu_load = DEFAULT_MIN_CPU_LOAD;
-
-        suspended = 0;
-
-        /* Initalize per-cpu data: */
-        for_each_possible_cpu(i) {
-                this_optimax = &per_cpu(optimax_info, i);
-                this_optimax->enable = 0;
-                this_optimax->cur_policy = 0;
-                this_optimax->force_ramp_up = 0;
-                this_optimax->max_speed = DEFAULT_SLEEP_WAKEUP_FREQ;
-                this_optimax->min_speed = DEFAULT_AWAKE_MIN_FREQ;
-                this_optimax->time_in_idle = 0;
-                this_optimax->idle_exit_time = 0;
-                this_optimax->freq_change_time = 0;
-                this_optimax->freq_change_time_in_idle = 0;
-                this_optimax->cur_cpu_load = 0;
-                // intialize timer:
-                init_timer_deferrable(&this_optimax->timer);
-                this_optimax->timer.function = cpufreq_optimax_timer;
-                this_optimax->timer.data = i;
-        }
-
-        /* Scale up is high priority */
-        up_wq = create_workqueue("koptimax_up");
-        down_wq = create_workqueue("koptimax_down");
-
-        INIT_WORK(&freq_scale_work, cpufreq_optimax_freq_change_time_work);
-
-        register_early_suspend(&optimax_power_suspend);
-
-        return cpufreq_register_governor(&cpufreq_gov_optimax);
-}
-
-#ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_optimax
-pure_initcall(cpufreq_optimax_init);
-#else
-module_init(cpufreq_optimax_init);
-#endif
-
-static void __exit cpufreq_optimax_exit(void)
-{
-        cpufreq_unregister_governor(&cpufreq_gov_optimax);
-        destroy_workqueue(up_wq);
-        destroy_workqueue(down_wq);
-}
-
-module_exit(cpufreq_optimax_exit);
-
-MODULE_AUTHOR ("jsseidel");
-MODULE_DESCRIPTION ("'cpufreq_optimax' - A badass cpufreq governor! Based on Smartass");
-MODULE_LICENSE ("GPL");
+MODULE_AUTHOR("Aaron Segaert <asegaert@gmail.com>");
+MODULE_DESCRIPTION("'cpufreq_elementalx' - multiphase cpufreq governor");
+MODULE_LICENSE("GPL");
