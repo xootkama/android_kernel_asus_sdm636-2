@@ -173,12 +173,6 @@ struct cs_cpu_dbs_info_s {
 	unsigned int requested_freq;
 };
 
-struct ex_cpu_dbs_info_s {
-	struct cpu_dbs_common_info cdbs;
-	unsigned int down_floor;
-	unsigned int enable:1;
-};
-
 /* Per policy Governors sysfs tunables */
 struct od_dbs_tuners {
 	unsigned int ignore_nice_load;
