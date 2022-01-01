@@ -38,6 +38,9 @@ source "drivers/message/fusion/Kconfig"
 
 source "drivers/firewire/Kconfig"
 
+source "drivers/oneplus/Kconfig"
+
+
 source "drivers/macintosh/Kconfig"
 
 source "drivers/net/Kconfig"
